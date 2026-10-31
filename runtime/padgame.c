@@ -38,7 +38,7 @@ static void pad_block(uint8_t *b)
                                             "GAMEPAD_3", "GAMEPAD_4", "GAMEPAD_6", "GAMEPAD_5", "GAMEPAD_2"};
     memset(b, 0, DEVICE_SIZE);
     strcpy((char *)b, PAD_ENTRY);
-    static const uint8_t flags[4] = {1, 1, 1, 1};    /* its screen's Transmission, Force Feedback, Analogue Steering [guess: which byte is which] */
+    static const uint8_t flags[4] = {1, 1, 1, 1};    /* the second is Force Feedback [verified: its screen]; the rest as Windows wrote them */
     memcpy(b + 100, flags, 4);
     for (int i = 0; i < 10; i++)
         strcpy((char *)b + 104 + i * 20, actions[i]);
