@@ -91,6 +91,14 @@ Championship and later divisions not played beyond the first race's start.
 0x515c70, 0x523550, 0x52d8e0) [guess: the same harmless classes as the other ports; not each checked].
 tests/fncheck_baseline.txt.
 
+## Checks on the T7 (2026-10-30)
+fncheck: nothing outside the baseline. Lockstep: memory identical on all 3600 frames, menus into a race,
+keyboard, widescreen off (test runs default to off). tools/dev/ws_check.sh, the same race with widescreen on and off:
+speed and gear equal at frames 3300, 3600, 3900, 4200 [verified: gauge crops], so it does not change the
+driving; memory is not compared there. Validation on lavapipe: 20 errors, all vkCreateShaderModule for
+features it lacks (ray query, buffer addresses, non-uniform indexing), none from a draw; the shaders
+are hardtruck2-native's unchanged. On the RTX 4070: no validation messages through a 3400-frame run into a race. On the T7 the validation messages go to the game's stdout, not its log.
+
 ## T7
 tools/dev/translator_check.sh runs fncheck and lockstep. On the T7 third_party/sdl3 and .venv are links to
 hardtruck2-native's, and the game is at the usual path.
