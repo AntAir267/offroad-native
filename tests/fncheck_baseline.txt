@@ -1,0 +1,30 @@
+# fncheck baseline (2026-10-28, T7, commit after the --test scheduler): 12040 pass, 28 seed
+# runs FAIL in these 16 functions. All judged harmless; a run with anything else is new.
+# Kinds (from the values in each line):
+#   fsw   - x87 status word bits the translation does not keep: sticky exception flags (ZE 0x04
+#           after a divide by zero on random inputs) or C1 (0x200), stored by fnstsw [verified:
+#           eax differs only in those bits; the game tests C0/C2/C3 after fcom]
+#   nan   - NaN sign or payload, or stack leftovers, on random inputs [guess: no game data is NaN]
+#   clock - the function reads the clock; the harness answers the two builds differently
+#   mmx   - MMX resets the x87 TOP to 0 on hardware; the translation keeps MMX apart from x87
+#           [guess: harmless unless code mixes them without emms/fninit]
+# 00488290 nan | 004e49d0 fsw | 004e4a41 fsw | 004f0080 fsw | 004fece0 fsw | 004fed80 fsw
+# 00513050 clock | 0052ef50 fsw | 0052efd0 fsw | 0059ef00 fsw | 005a9410 fsw (C1)
+# 005abba0 nan | 005e5e30 nan | 005fe182 mmx | 00604dfb clock | 00626646 nan
+FAIL 00488290: seed 1: st phys7 335.85900000000000001 vs 1; 
+FAIL 004e49d0: seed 1: eax 00003100 vs 00003104; 
+FAIL 004e4a41: seed 4: eax ffc07500 vs ffc07504; 
+FAIL 004f0080: seed 4: eax 3f802900 vs 3f802904; 
+FAIL 004fece0: seed 2: eax 00002800 vs 00002804; mem 025ef75e ff vs 00; mem 025ef75f ff vs 00; mem 025ef760 00 vs 04; mem 025ef762 ff vs 00; mem 025ef763 ff vs 00; mem 025ef764 00 vs ff; mem 025ef765 
+FAIL 004fed80: seed 4: mem 025ef74e ff vs 00; mem 025ef74f ff vs 00; mem 025ef750 00 vs 04; mem 025ef752 ff vs 00; mem 025ef753 ff vs 00; mem 025ef754 00 vs ff; mem 025ef755 00 vs 0f; mem 025ef758 00 
+FAIL 00513050: seed 1: eax 00000bb8 vs b3932040; edx 00000000 vs 00004f80; mem 025ef7f4 b8 vs 40; mem 025ef7f5 0b vs 20; mem 025ef7f6 00 vs 93; mem 025ef7f7 00 vs b3; mem 025ef7f8 00 vs 80; mem 025ef7
+FAIL 0052ef50: seed 4: eax ffc07500 vs ffc07504; 
+FAIL 0052efd0: seed 4: eax ffc07500 vs ffc07504; 
+FAIL 0059ef00: seed 4: eax 02606d00 vs 02606d04; 
+FAIL 005a9410: seed 3: eax 02602800 vs 02602a00; 
+FAIL 005abba0: seed 4: st phys6 -213.22799999999999999 vs -nan; st phys7 744.63500000000000001 vs -nan; 
+FAIL 005e5e30: seed 4: eax ffdb3fe3 vs 7ffa7d70; ecx ffdb3fe3 vs 7ffa7d70; mem 025ef7cc e3 vs 70; mem 025ef7cd 3f vs 7d; mem 025ef7ce db vs fa; mem 025ef7cf ff vs 7f; mem 025ef7f0 e3 vs 70; mem 025ef7
+FAIL 005fe182: seed 2: fpu top 6 vs 0; 
+FAIL 00604dfb: seed 1: eax 00000bb8 vs d5442e16; edx 00000000 vs 00005150; mem 0260c244 b8 vs 16; mem 0260c245 0b vs 2e; mem 0260c246 00 vs 44; mem 0260c247 00 vs d5; mem 0260c248 00 vs 50; mem 0260c2
+FAIL 00626646: seed 1: st phys4 -nan vs nan; 
+runs: 12040 pass, 37016 skipped (import 9083, fault 27499, long 434), 28 FAIL
