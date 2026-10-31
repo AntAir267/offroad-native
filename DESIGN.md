@@ -78,9 +78,12 @@ accelerate, LT brake, A handbrake, X rear view, Y camera, RB/LB gears, B nitro, 
 replaces Ant's old RB/LB on accelerate and brake. Flag bytes: the second is Force Feedback [verified: screen].
 Front end: A select, B back, left stick and D-pad move, Start is Escape. Race: Start opens and closes
 the menu; B is nitro there, not back. Movies: A, B or Start skip.
-Prompts: while the controller is the device used last, text_hook (every line of text, 0x4b5540) shows Xbox
-names on the controller screen and "(A) Continue", "(B) Back", "(A) Done", "(A) Race", "(A) Accept",
-in the game's own font and English only; they go back to plain when the keyboard is used. No button icons.
+Prompts and icons: while the controller is the device used last, text_hook (every line of text, 0x4b5540)
+puts real button icons in: the bindings on the controller screen, and Continue, Done, Accept, Race, Back. They are
+characters of the game's own fonts (Impact_italic_med and _small, all languages), in <font>_512.tga images the
+first start writes to the user folder from Main.mng: padgame.c's head comment has how. The art is
+drawn for this project (tools/make_pad_icons.py, runtime/pad_icons.h), as lr2-native's: no real Xbox art is
+in the game. A screen keeps what it opened with, and only the next screen follows a change of device.
 "Waiting For Input - Escape To Cancel" stays: Escape is what cancels there.
 Verified with the scripted pad, off-screen. A real pad and rumble are not tested.
 

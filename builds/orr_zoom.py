@@ -51,6 +51,10 @@ HOOKS = {
     # text drawn (ECX the font; x, y, text, ...): the controller's names and prompts
     0x4f9f20: 'bind',
     0x4b5540: 'text',
+    # padgame.c: a font's characters read (ECX the font, first argument the .dat's path); one character
+    # drawn (ECX the glyph, arguments the batch and the colour): the button icons
+    0x4b7a30: 'font_chars',
+    0x4b68d0: 'glyph_draw',
     # menu.c: VIDEO's widgets being made (ECX the table), and its screen's handler (ECX the widget, EDX
     # the message)
     0x488330: 'video_rows',
