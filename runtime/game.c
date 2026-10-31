@@ -54,6 +54,7 @@ static int puff_draw_hook(CPU *c)
     const D3DState *ds = d3d_last_state();
     if (!ds)
         return 0;
+    W8(o + 0x13, 0);                     /* (as the draw does, first thing, 0x53c28d) */
     uint32_t renderer = R32(c->esp + 4), cam = R32(renderer + 4), keep = c->ecx;
     static uint32_t buf;
     if (!buf)

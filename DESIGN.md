@@ -124,6 +124,10 @@ projection from the camera; depth a + b / w fits D3D's. Changes from a faithful 
 only wisps as volumes: puffs twice the size and growing with age, density 6 (vk.c sm_density), and one earth colour
 instead of the sprite's grey tint [guess: every surface; the road gets tan dust too]. The wheels fade by darkening,
 turned into alpha. Sun direction is a fixed guess, not the track's. Puffs of other classes (0x57ad34 and the rest) stay sprites.
+Dust cost at 2560x1600 on the 890M in a slide, other builds running: GPU 4.0 to 5.1 ms on average, none over 16.7 ms.
+It does not change the race: 3500 frames after a slide with dust on and off, frames with no dust in them are
+pixel-identical (5400, 6000) [verified: --test runs]. T7: fncheck and lockstep unchanged (their runs leave dust off);
+a slide with dust on the RTX 4070, 4600 frames: no validation messages.
 Not done: ray-traced shadows. Findings (static reading of 1nsane-native's shadows.c):
 the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
