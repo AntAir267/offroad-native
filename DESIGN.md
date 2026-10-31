@@ -114,6 +114,7 @@ what it looks like far away has not been judged.
 AO: shaders/ssao.frag, vk.c ssao_passes, from the depth buffer at the first flat draw after the world. z = a + b / w
 fitted from each depth-writing draw's two ends [verified: a 0.982, b -19.6 logged; z rises to a with distance]. The
 inherited ray-traced AO needs geometry this game does not hand over.
+T7, 2026-10-31: fncheck and lockstep unchanged (their runs leave the menu page and draw distance out); AO, 4x and Extreme on the RTX 4070, 3900 frames: no validation messages.
 Not done: ray-traced shadows and volumetric dust. Findings (static reading of 1nsane-native's shadows.c, smoke.c):
 the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
