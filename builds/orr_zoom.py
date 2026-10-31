@@ -64,6 +64,8 @@ HOOKS = {
     0x488330: 'video_rows',
     0x4874f0: 'video_screen',
     # game.c: cameras about to take the far plane from data (0x5d0e78): the draw distance option
+    # game.c: a puff's draw, every sprite effect's (ECX the object, first argument the batch)
+    0x53c260: 'puff_draw',
     0x4a54b0: 'cameras_file',
     0x4d94b0: 'race_cameras',
 }

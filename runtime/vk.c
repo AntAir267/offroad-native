@@ -367,7 +367,7 @@ static int sm_steps;              /* ORR_SMOKE_STEPS: every puff's steps (0: by 
 static int sm_scale;              /* ORR_SMOKE_SCALE: the render target's pixels a march pixel each way (0: 2, 4X: 4) */
 static float sm_budget = 10.0f;   /* ORR_SMOKE_BUDGET: the march's work at most (steps over the smaller image's
                                      area, so many times) before the puffs' steps are made coarser */
-static float sm_density = 1.0f;   /* ORR_SMOKE_DENSITY: scales the puffs' density */
+static float sm_density = 6.0f;   /* ORR_SMOKE_DENSITY: scales the puffs' density (Off-Road's are far smaller and fainter than 1NSANE's, for which this was 1) */
 static int sm_log;                /* ORR_SMOKE_LOG=1 */
 static int sm_glass = 1;          /* ORR_SMOKE_GLASS=0: puffs behind glass drawn over it (timing) */
 static int sm_shadows = 1;        /* ORR_SMOKE_SHADOWS=0: the puffs cast no shadows */
@@ -514,6 +514,8 @@ static GpuImg *r_color, *r_depth;
 static int ssao_on, ssao_done, ssao_world;
 static float ssao_a, ssao_b;
 static void ssao_passes(GpuImg *c, GpuImg *z);
+void vkr_smoke_view_end(void);
+static int smv_depth;
 static int bg_phase = 1;          /* widescreen: still in the frame's leading background tiles */
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
@@ -844,7 +846,7 @@ void vkr_options(void)
     }
     tex_smooth = !strcasecmp(option_str("textures", "smooth"), "smooth");
     ssao_on = !strcasecmp(option_str("ambient_occlusion", "on"), "on");
-    vk_smoke_depth = ssao_on;             /* its passes read the depth buffer */
+    vk_smoke_depth = ssao_on || !strcasecmp(option_str("volumetric_dust", "on"), "on");   /* their passes read the depth buffer */
     const char *cp = option_str("colour_precision", "high");
     hp_want = !strcasecmp(cp, "high");
     if (!hp_want && strcasecmp(cp, "original"))
@@ -3774,6 +3776,8 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             ssao_done = 1;
             ssao_passes(c, z);
         }
+        if (flat && w0 < 1.5f && ssao_world && smv_depth > 0)
+            vkr_smoke_view_end();          /* the puffs, over the world and under the HUD */
         if (c->ox > 0.5f) {
             int race = wide_world || wide_world_last;
             if (!flat) {

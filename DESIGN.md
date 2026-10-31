@@ -115,11 +115,19 @@ AO: shaders/ssao.frag, vk.c ssao_passes, from the depth buffer at the first flat
 fitted from each depth-writing draw's two ends [verified: a 0.982, b -19.6 logged; z rises to a with distance]. The
 inherited ray-traced AO needs geometry this game does not hand over.
 T7, 2026-10-31: fncheck and lockstep unchanged (their runs leave the menu page and draw distance out); AO, 4x and Extreme on the RTX 4070, 3900 frames: no validation messages.
-Not done: ray-traced shadows and volumetric dust. Findings (static reading of 1nsane-native's shadows.c, smoke.c):
+Volumetric dust (game.c puff_draw_hook, on by default, row in More Options): the puff classes share a draw, 0x53c260:
+world position +0x2c, half size +0x3c, +0x40, colour +0x48, age +0x64 [verified: disassembly; spawn log: 0x57abcc from
+0x49132d, the wheels, over 1000 a lap; 0x57acf4 from 0x4bc717]. The hook sends the wheels' and exhausts' to the
+inherited volumetric renderer in view space and skips the sprite. The camera's 0x4f0cb0 matrix is view and
+projection together (column 3 the depth). Made up for it: a D3D state with identity world and view and a
+projection from the camera; depth a + b / w fits D3D's. Changes from a faithful copy, because at 30 cm across the sprites make
+only wisps as volumes: puffs twice the size and growing with age, density 6 (vk.c sm_density), and one earth colour
+instead of the sprite's grey tint [guess: every surface; the road gets tan dust too]. The wheels fade by darkening,
+turned into alpha. Sun direction is a fixed guess, not the track's. Puffs of other classes (0x57ad34 and the rest) stay sprites.
+Not done: ray-traced shadows. Findings (static reading of 1nsane-native's shadows.c):
 the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
 shadows need world meshes hooked before the game's own transform, code not read yet, and the game's own shadows off.
-Dust needs its particle code found and hooked to feed VkPuff, plus a synthesized camera.
 
 ### 8. Not done yet (next)
 Resolution and frame limit are options.txt only: More Options has room for two more rows. Play through by Ant. Real audio device and real pad, only scripted so far.

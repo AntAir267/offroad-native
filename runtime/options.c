@@ -70,7 +70,7 @@ static void write_template(const char *path)
 {
     static const char *const def[][2] = {
         {"display", "window"}, {"resolution", "native"}, {"widescreen", "on"}, {"antialiasing", "off"},
-        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"draw_distance", "far"}, {"vsync", "on"},
+        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"draw_distance", "far"}, {"vsync", "on"},
         {"frame_limit", "off"}, {"render_thread", "on"}, {"rumble", "on"}, {"controller_deadzone", "6"},
         {NULL, NULL}};
     FILE *f = fopen(path, "w");
@@ -200,6 +200,8 @@ void options_changed(void)
 {
     extern void vk_options(void), widescreen_options(void), win_options(void), pad_options(void),
         d3d_options(void);
+    extern void game_options(void);
+    game_options();
     widescreen_options();
     vk_options();
     win_options();

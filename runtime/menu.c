@@ -43,10 +43,11 @@ static Row rows[] = {
     {"colour_precision", "high", "Colour Precision", "Less Banding In The Sky And Fog", 2, {"Original", "High"}, {"original", "high"}, 0, 0, 0},
     {"draw_distance", "far", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0},
     {"ambient_occlusion", "on", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
+    {"volumetric_dust", "on", "Volumetric Dust", "Real Clouds Of Dust And Exhaust Smoke", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
 };
 #define NROWS ((int)(sizeof rows / sizeof *rows))
 
-static float fl_y(int i) { return 96.0f + 42.0f * (float)i; }
+static float fl_y(int i) { return 90.0f + 40.0f * (float)i; }
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 static uint32_t fast(CPU *c, uint32_t fn, uint32_t a, uint32_t b)
