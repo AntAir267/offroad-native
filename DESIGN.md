@@ -69,8 +69,8 @@ this+0x24.. in 0x4d94b0, and the code in the world's transform that reads it.
 padgame.c, see its head comment. Ant's own Configs\p1controll.cfg has the Xbox pad as device 1 (his
 binds RB accelerate, LB brake); the user folder's first copy gets triggers on accelerate and brake and
 the bumpers on the gears. Verified with the scripted pad: movie skip, menus, new Championship through
-to a race with 5 AI cars, RB accelerate and stick steering. Trigger driving itself not yet verified:
-the one run that scripted it stopped in the movies, before the skip existed.
+to a race with 5 AI cars, RB accelerate and stick steering. Triggers [verified: scripted run 2026-10-30,
+RT 30 and 46 mph climbing, 53 falling to 42 under LT; how proportional they are not measured].
 
 ### 8. Not done yet (next)
 Port options in the game's own Game Options menu (GAME-GOALS; menu.c is empty, settings are options.txt
