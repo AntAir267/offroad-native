@@ -7,7 +7,7 @@ N=$1; K=$2
 G=${GAME:-$HOME/.local/share/offroad-native/game}; W=work/lockstep; OUT=work/bisect_$N.txt
 lo=$(sed -n "$((N-1))p" $W/nat.hash | cut -d' ' -f2); hi=$(sed -n "${N}p" $W/nat.hash | cut -d' ' -f2)
 run() {
-    b=$1; shift; bin=ht2; [ $b = ref ] && bin=ht2_ref
+    b=$1; shift; bin=offroad; [ $b = ref ] && bin=offroad_ref
     rm -rf $W/user_$b; cp -r work/seed $W/user_$b
     ORR_CALLS_ONLY=${CALLS_ONLY:-} ORR_KEYS="$K" build/$bin --game $G --user $W/user_$b --test \
         --frames $((N+1)) --logfile $W/$b.log "$@" > /dev/null 2>&1

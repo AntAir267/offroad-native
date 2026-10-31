@@ -9,7 +9,7 @@ enum { PAD_A, PAD_B, PAD_X, PAD_Y, PAD_BACK, PAD_GUIDE, PAD_START, PAD_LSTICK, P
        PAD_RB, PAD_DUP, PAD_DDOWN, PAD_DLEFT, PAD_DRIGHT, PAD_MISC1, PAD_BUTTONS = 26 };
 enum { PAD_LX, PAD_LY, PAD_RX, PAD_RY, PAD_LT, PAD_RT, PAD_AXES };
 
-/* The joystick the game sees: see pad.c (X left stick across, Y the triggers together, Xbox
+/* The joystick the game sees: see pad.c (X, Y the left stick, Z the triggers together, Xbox
    button order). */
 int pad_attach(const char *id, const char *name);   /* returns the joystick slot, -1 if none free */
 void pad_detach(int slot);
@@ -19,6 +19,7 @@ void pad_button(int slot, int button, int down);
 /* The current state of every connected controller together (for menu navigation). */
 int pad_held(int button);
 int pad_axis_value(int axis);                         /* the one furthest from rest */
+int pad_prompts(void);                                /* a controller was the device used last */
 int pad_count(void);                                  /* controllers connected */
 int pad_active_slot(void);                            /* the one used last (a button, or a stick or trigger well off rest), -1 none */
 

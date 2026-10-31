@@ -16,8 +16,8 @@ def run(binary, args, work, name, keys, extra):
         shutil.copytree(args.seed, user)    # the user folder starts as this one (settings files)
     else:
         os.makedirs(user)
-    env = dict(os.environ, HT2_KEYS=keys or '')
-    env.pop('HT2_DUMP_FRAMES', None)
+    env = dict(os.environ, ORR_KEYS=keys or '')
+    env.pop('ORR_DUMP_FRAMES', None)
     cmd = [os.path.join(ROOT, 'build', binary), '--game', args.game, '--user', user, '--test',
            '--frames', str(args.frames), '--logfile', os.path.join(work, name + '.log')] + extra
     r = subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -35,8 +35,8 @@ def read_hashes(path):
 
 def both(args, work, extra_nat, extra_ref):
     with cf.ThreadPoolExecutor(2) as ex:
-        a = ex.submit(run, 'ht2', args, work, 'nat', args.keys, extra_nat)
-        b = ex.submit(run, 'ht2_ref', args, work, 'ref', args.keys, extra_ref)
+        a = ex.submit(run, 'offroad', args, work, 'nat', args.keys, extra_nat)
+        b = ex.submit(run, 'offroad_ref', args, work, 'ref', args.keys, extra_ref)
         return a.result(), b.result()
 
 

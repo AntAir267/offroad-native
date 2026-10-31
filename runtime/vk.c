@@ -3736,8 +3736,8 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     float shift = 0.0f;
     /* Off-Road (widescreen.c): the world comes as screen coordinates past the 4:3 picture's sides, which
        land in the side space as they are: only the scissor grows. Flat drawings have one rhw for all
-       their vertices (the HUD and menus 1, the sky's backdrop 2): one filling the width fills the
-       screen, and in a race one wholly in the left or right third goes to that edge. */
+       their vertices (the HUD and menus 1, the sky's backdrop 2). In a race one filling the width fills
+       the screen and one wholly in the left or right third goes to that edge. */
     if (pretransformed && !k && c->ox > 0.5f) {
         float x0 = 1e9f, x1 = -1e9f, w0 = 1e9f, w1 = -1e9f, W = (float)c->lw;
         for (int i = 0; i < nv; i++) {
@@ -3752,7 +3752,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
                 race = wide_world = 1;
             if (race)
                 half *= ws_aspect / (4.0f / 3.0f);
-        } else if (x1 - x0 >= 0.98f * W) {
+        } else if (race && x1 - x0 >= 0.98f * W) {
             place = 2;
             mid = (vx + vw / 2.0f) * c->sx;
             half = vw * c->sx / 2.0f;

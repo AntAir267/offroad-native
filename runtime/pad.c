@@ -2,11 +2,8 @@
    (win.c), and ORR_PAD, a scripted controller for headless tests that goes through the
    same calls.
 
-   TD6 reads a joystick's X and Y axes and its first buttons only (0x40a010): X steers, Y is one
-   axis for accelerating (up, -) and braking (down, +), as wheel pedals were then. So the joystick
-   it sees has X = left stick across, Y = the triggers together (RT up, LT down, as Windows'
-   driver puts an Xbox controller's triggers on one axis), Z = left stick up/down, Rx/Ry = right
-   stick, the D-pad as POV 0, and the buttons in the order Windows gives an Xbox controller:
+   The joystick the game sees is laid out as Windows gives it an Xbox controller: X, Y the left stick, Z the
+   triggers together (RT -, LT +), Rx/Ry the right stick, the D-pad as POV 0, and the buttons
    0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 left stick, 9 right stick, 10 Guide.
    Both sticks get a round dead zone against resting drift (controller_deadzone in options.txt,
    percent, default 6), the rest of the travel stretched over the range. */
@@ -32,8 +29,8 @@ static Pad pads[INPUT_MAX_JOYS];
 static double stick_dead = 0.06 * 32767;
 
 /* SDL axis -> joystick axis (see above; the triggers are worked out together) */
-static const int joy_axis[PAD_AXES] = {INPUT_AXIS_X, INPUT_AXIS_Z, INPUT_AXIS_RX, INPUT_AXIS_RY,
-                                       INPUT_AXIS_Y, INPUT_AXIS_Y};
+static const int joy_axis[PAD_AXES] = {INPUT_AXIS_X, INPUT_AXIS_Y, INPUT_AXIS_RX, INPUT_AXIS_RY,
+                                       INPUT_AXIS_Z, INPUT_AXIS_Z};
 /* SDL button -> joystick button (-1: the D-pad, the POV) */
 static const int joy_button[PAD_BUTTONS] = {0, 1, 2, 3, 6, 10, 7, 8, 9, 4, 5, -1, -1, -1, -1, 11,
                                             12, 13, 14, 15, -1, -1, -1, -1, -1, -1};
@@ -66,6 +63,9 @@ int pad_attach(const char *id, const char *name)
     return slot;
 }
 
+/* show the controller's prompts: one is connected and was the device used last */
+int pad_prompts(void) { return last_controller && pad_count() > 0; }
+
 void pad_detach(int slot)
 {
     if (slot < 0 || slot >= INPUT_MAX_JOYS)
@@ -92,11 +92,11 @@ void pad_axis(int slot, int axis, int value)
         input_used(1);
         active_slot = slot;
     }
-    if (axis >= PAD_LT) {                /* Y: LT (0..32767) down, RT up */
+    if (axis >= PAD_LT) {                /* Z: LT (0..32767) +, RT -, as Windows has an Xbox controller */
         pthread_mutex_lock(&pad_lock);
         int y = pads[slot].axis[PAD_LT] - pads[slot].axis[PAD_RT];
         pthread_mutex_unlock(&pad_lock);
-        input_joy_axis(slot, INPUT_AXIS_Y, clamp16(y));
+        input_joy_axis(slot, INPUT_AXIS_Z, clamp16(y));
         return;
     }
     /* a stick: round dead zone, the rest of the travel stretched over the full range */

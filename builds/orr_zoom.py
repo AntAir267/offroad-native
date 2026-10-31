@@ -41,6 +41,16 @@ HOOKS = {
     # a camera's viewport set (ECX the camera, first argument 14 floats: focal x, y at +0, +4, width
     # at +0x24): widescreen.c widens the race's
     0x4f1350: 'viewport',
+    # the renderer's clip rectangle set (ECX the renderer, two pointers to x, y: its +0x3ec..+0x3f8,
+    # which every polygon is clipped to): widescreen.c lets the world past the 4:3 picture's sides
+    0x4f6b20: 'clip_rect',
+    # the camera's scale for flat drawings (ECX the camera: +0x1fc, +0x200 origin, +0x204, +0x208 scale
+    # from 640 x 480): widescreen.c keeps them 4:3, so the HUD lays out as it always did
+    0x4f17d0: 'camera_flat',
+    # padgame.c: a control bound (ECX the input object; action name, input name, player); a line of
+    # text drawn (ECX the font; x, y, text, ...): the controller's names and prompts
+    0x4f9f20: 'bind',
+    0x4b5540: 'text',
 }
 CONSTS = {}
 INLINE = {}

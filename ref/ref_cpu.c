@@ -1,7 +1,7 @@
 /* Reference build: the original Game.exe machine code run by the Unicorn CPU emulator instead of
    the translated C, on the same runtime (design point 10). Calls into the runtime (imports, COM
    methods) stop the emulator, run the runtime's C code on the shared CPU record, and resume.
-   With --test and the same scripted input, build/ht2_ref and build/ht2 must leave the
+   With --test and the same scripted input, build/offroad_ref and build/offroad must leave the
    same memory every frame (tools/compare.py).
 
    Unicorn maps the program's memory directly (the image and the arena), so the runtime sees one
@@ -34,7 +34,7 @@ typedef struct {
 extern const FuncEntry hooked_table[];
 extern const int hooked_count;
 #define HOOK_TRAMP 0x7efd0000u
-static int ref_debug;                   /* HT2_REF_DEBUG: log hooked functions and nested calls */
+static int ref_debug;                   /* ORR_REF_DEBUG: log hooked functions and nested calls */
 
 static __thread Engine *eng;
 
@@ -342,5 +342,5 @@ static void ref_run1(CPU *c, Engine *e, uint32_t target, uint32_t until, uint32_
 __attribute__((constructor)) static void ref_init(void)
 {
     icall_hook = ref_icall;
-    ref_debug = getenv("HT2_REF_DEBUG") != NULL;
+    ref_debug = getenv("ORR_REF_DEBUG") != NULL;
 }
