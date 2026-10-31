@@ -37,7 +37,11 @@ NORETURN_IMPORTS = ['ExitProcess', 'ExitThread', 'TerminateProcess']
 
 TABLES = []
 # Functions the runtime may hook (see 1nsane-native / td6-native): hook_<name>, run at entry.
-HOOKS = {}
+HOOKS = {
+    # a camera's viewport set (ECX the camera, first argument 14 floats: focal x, y at +0, +4, width
+    # at +0x24): widescreen.c widens the race's
+    0x4f1350: 'viewport',
+}
 CONSTS = {}
 INLINE = {}
 # Game data the runtime reads: emitted as GAME_<NAME> in gen/image.h.

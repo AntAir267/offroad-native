@@ -341,8 +341,6 @@ int main(int argc, char **argv)
     scratch = vm_alloc(0, 0x10000, 0);
     uc_setup();
     if (native_mode) {
-        extern void native_init(void);
-        native_init();
     }
     int count[5] = {0};
     for (int k = 0; k < func_count; k++) {

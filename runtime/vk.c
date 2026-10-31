@@ -511,6 +511,7 @@ static VkCommandBuffer cb;
 
 static GpuImg *r_color, *r_depth;
 static int bg_phase = 1;          /* widescreen: still in the frame's leading background tiles */
+static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
 /* Render resolution (options.txt "resolution"): "original" draws at the program's display
    mode and scales the picture to the window; "native" draws render targets at the size the
@@ -3732,11 +3733,42 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
         half = vw * c->sx / 2.0f;
         hp = 0.5f * c->sx;
     }
+    float shift = 0.0f;
+    /* Off-Road (widescreen.c): the world comes as screen coordinates past the 4:3 picture's sides, which
+       land in the side space as they are: only the scissor grows. Flat drawings have one rhw for all
+       their vertices (the HUD and menus 1, the sky's backdrop 2): one filling the width fills the
+       screen, and in a race one wholly in the left or right third goes to that edge. */
+    if (pretransformed && !k && c->ox > 0.5f) {
+        float x0 = 1e9f, x1 = -1e9f, w0 = 1e9f, w1 = -1e9f, W = (float)c->lw;
+        for (int i = 0; i < nv; i++) {
+            x0 = v[i].x < x0 ? v[i].x : x0;
+            x1 = v[i].x > x1 ? v[i].x : x1;
+            w0 = v[i].w < w0 ? v[i].w : w0;
+            w1 = v[i].w > w1 ? v[i].w : w1;
+        }
+        int race = wide_world || wide_world_last;
+        if (w0 != w1) {
+            if (x0 < -1.0f || x1 > W + 1.0f)
+                race = wide_world = 1;
+            if (race)
+                half *= ws_aspect / (4.0f / 3.0f);
+        } else if (x1 - x0 >= 0.98f * W) {
+            place = 2;
+            mid = (vx + vw / 2.0f) * c->sx;
+            half = vw * c->sx / 2.0f;
+            hp = 0.5f * c->sx;
+        } else if (race) {
+            if (x1 <= 0.35f * W)
+                shift = -c->ox;
+            else if (x0 >= 0.65f * W)
+                shift = c->ox;
+            mid += shift;
+        }
+    }
     /* Race HUD in widescreen: a piece drawn by the HUD routines moves to the screen edge it is
        nearest in the 4:3 picture (left or right half; one across the middle stays centred). Other
        flat drawings of a race frame (name labels over the cars) keep their shape but take their
        position from the widened view. Menus, including the pause menu, keep their layout. */
-    float shift = 0.0f;
     static float vshift[4096];    /* (name labels: each name's own shift, by vertex) */
     int by_vertex = 0;
     if (!k && c->ox > 0.5f && place != 2 && ws_race_depth > 0 && ws_menu_depth == 0 && (ws_hud_depth > 0 || place == 0)) {
@@ -7533,6 +7565,8 @@ void vkr_present(Surface *src, const int *rect)
     sh_views = 0;
     sm_slots_used = 0;
     bg_phase = 1;
+    wide_world_last = wide_world;
+    wide_world = 0;
     if (hp_flip && nframes % (unsigned long)hp_flip == 0)
         hp_want ^= 1;
     res_update();                 /* the next frame's render size follows the window */

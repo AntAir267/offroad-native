@@ -5,7 +5,7 @@
 # work/cmp/<scene>_<frame>.png (A | B | difference) for frames that differ.
 #   tools/dev/compare_render.sh "renderer=original" "renderer=native"
 A=$1; B=$2
-G=${GAME:-$HOME/.local/share/hardtruck2-native/game}; W=work/cmp
+G=${GAME:-$HOME/.local/share/offroad-native/game}; W=work/cmp
 rm -rf $W; mkdir -p $W
 # scenes: name, frames, dump frames, keys
 scenes=(
@@ -17,10 +17,10 @@ run() {   # label, option, scene line
     IFS='|' read -r name frames dumps keys <<< "$3"
     local d=$W/$1_$name; mkdir -p $d/user
     local opt=$2 envs=()
-    if [[ $opt == env:* ]]; then read -ra envs <<< "${opt#env:}"; opt="renderer=${RENDERER:-original}"; fi   # "env:HT2_RENDER_THREAD=1"
-    env "${envs[@]}" HT2_WIDESCREEN=1 HT2_GPU_OFFSCREEN=1 HT2_GPU_OFFSCREEN_SIZE=${SIZE:-1280x720} HT2_DUMP_PRESENT=1 \
-    HT2_DUMP_FRAMES=$d HT2_DUMP_LIST=$dumps HT2_KEYS="$keys" \
-        build/ht2 --test --user $d/user --option "$opt" --frames $frames --logfile $d/log.txt > /dev/null 2>&1
+    if [[ $opt == env:* ]]; then read -ra envs <<< "${opt#env:}"; opt="renderer=${RENDERER:-original}"; fi   # "env:ORR_RENDER_THREAD=1"
+    env "${envs[@]}" ORR_WIDESCREEN=1 ORR_GPU_OFFSCREEN=1 ORR_GPU_OFFSCREEN_SIZE=${SIZE:-1280x720} ORR_DUMP_PRESENT=1 \
+    ORR_DUMP_FRAMES=$d ORR_DUMP_LIST=$dumps ORR_KEYS="$keys" \
+        build/offroad --test --user $d/user --option "$opt" --frames $frames --logfile $d/log.txt > /dev/null 2>&1
     echo "$1 $name exit $?" >> $W/summary.txt
 }
 for sc in "${scenes[@]}"; do run a "$A" "$sc" & run b "$B" "$sc" & wait; done

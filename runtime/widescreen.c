@@ -1,17 +1,15 @@
-/* Widescreen (options.txt widescreen = on | off | <w>:<h>; on, the default, follows the shape of
-   the window or screen): Hor+ for Hard Truck 2's 3D world.
+/* Widescreen: the race's world wider than the game's 4:3 mode, height of view kept (Hor+).
 
-   The game draws its world through Direct3D's own transform with a perspective projection made
-   from a fixed horizontal view ([EFFECTS] xpyramid in TRUCK.INI) and its viewport's shape: the
-   driving camera's viewport is 640x430 under the instrument bar, projection x scale 1.02,
-   y scale 1.52 = x scale * 640/430 [verified: run log 2026-10-26]. With widescreen, a perspective
-   projection used with a full-width viewport gets its x scale divided by the widening (d3d.c
-   ws_projection): the same vertical view, more at the sides. The renderer then spreads such a
-   camera's drawing across the wider picture (vk.c: proj_widened, the projection's y/x scale being
-   ws_world_aspect); everything else - the instrument bar, the menus (8-bit screens), the small
-   views - keeps its 4:3 shape in the middle.
+   The game stays in 1024x768, so its screens and HUD keep their layout: everything flat is placed
+   by its 4:3 coordinates (vk.c: c->ox, the side space; the HUD's side pieces go to the edges). OffRoad.exe
+   transforms and clips the world itself and hands the renderer screen coordinates (XYZRHW). Its
+   focal lengths are the viewport's width / 640 (0x4f1350, both axes) and it clips to the viewport.
+   So the cameras the race sets up (0x4d94b0, viewport_hook) get a viewport wider by ws_aspect / (4/3) about the same
+   centre, focal lengths scaled back: the 4:3 picture stays as it was and the world carries on past its
+   sides, x from below 0 to above 1024. The renderer squeezes those back into the viewport and
+   spreads it [verified: decompile of 0x4f1350, 0x4d94b0; frames 2026-10-30].
 
-   Off in --test runs (it changes what is drawn) unless ORR_WIDESCREEN is set. */
+   Not finished, so off by default: DESIGN.md section 6. */
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -30,7 +28,7 @@ int ws_race_depth, ws_hud_depth, ws_menu_depth;   /* (TD6's placement rules: unu
 
 static void parse(void)
 {
-    const char *v = option_str("widescreen", "on");
+    const char *v = option_str("widescreen", "off");
     ws_want = 0;
     if (!strcasecmp(v, "off") || !strcasecmp(v, "no") || !strcmp(v, "0")) {
         ws_on = 0;
@@ -47,12 +45,33 @@ static void parse(void)
     ws_aspect = ws_on && ws_want > 0 ? ws_want : 4.0f / 3.0f;
 }
 
+static int viewport_hook(CPU *c)
+{
+    float k = ws_on ? ws_aspect / (4.0f / 3.0f) : 1.0f;
+    /* who sets it: the race's cameras (0x4d94b0, and 0x524f90, 0x525880, which set them again for the
+       race's scripted views, from what is already widened); screens and the HUD's own cameras are left 4:3 */
+    uint32_t from = R32(c->esp);
+    if (k <= 1.001f || from < 0x4d94b0 || from >= 0x4d9900)
+        return 0;
+    uint32_t p = R32(c->esp + 4), fx = R32(p), fy = R32(p + 4), width = R32(p + 0x24);
+    union { float f; uint32_t u; } a = {RF32(p) / k}, b = {RF32(p + 4) / k}, n = {RF32(p + 0x24) * k};
+    W32(p, a.u);
+    W32(p + 4, b.u);
+    W32(p + 0x24, n.u);
+    F_004f1350_orig(c);
+    W32(p, fx);
+    W32(p + 4, fy);
+    W32(p + 0x24, width);
+    return 1;
+}
+
 void widescreen_init(void)
 {
     allowed = !deterministic || getenv("ORR_WIDESCREEN");
     parse();
     if (ws_on && !allowed)
         ws_on = 0;
+    hook_viewport = viewport_hook;
 }
 
 void widescreen_options(void)
