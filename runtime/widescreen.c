@@ -118,6 +118,7 @@ void widescreen_options(void)
 }
 
 int widescreen_on(void) { return ws_on; }
+int widescreen_allowed(void) { return allowed; }
 
 /* The renderer tells us the shape of the picture area (window or screen). */
 void widescreen_screen(int w, int h)

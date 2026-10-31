@@ -64,7 +64,12 @@ Dropped: a wide game mode (ResolutionX 1366). Its HUD and menus scale by width /
 the gauge by width on both axes, off the bottom of the screen.
 Verified at 1920x1080 on the 890M: race, HUD, pause menu, menus and movies. Not checked: split screen.
 0x413830 reads the camera's width / 640 for its size (a world effect [guess: sprites]): may be 1/3 wider.
-Off via options.txt `widescreen = off` only: no row in the game's Video screen yet (GAME-GOALS wants one).
+GAME OPTIONS > VIDEO has a Widescreen row (menu.c, see its head comment): a real row made by the game's own
+functions, so it has the arrows, sounds, help line and controller support. Brightness moved up 14 to fit
+(0x5b95c8). It applies at once and saves to options.txt [verified: pad run, off to on, into a race; a
+restart reads it]. Text is English only. Not installed in test runs without ORR_WIDESCREEN, so lockstep sees the
+original screen. A render target changing shape is cleared, not stretched (rt_sync): the old picture
+otherwise stays in the side space, where nothing draws.
 
 ### 7. Controller and prompts (2026-10-30)
 padgame.c, see its head comment. The joystick is laid out as Windows does an Xbox pad (X, Y left stick, Z
@@ -80,8 +85,8 @@ in the game's own font and English only; they go back to plain when the keyboard
 Verified with the scripted pad, off-screen. A real pad and rumble are not tested.
 
 ### 8. Not done yet (next)
-Port options in the game's own Video screen (GAME-GOALS; menu.c is empty, settings are options.txt
-for now). Play through by Ant. Real audio device and real pad, only scripted so far.
+Other port options (resolution, frame limit, ...) are options.txt only: the Video screen has no more room
+without a second page. Play through by Ant. Real audio device and real pad, only scripted so far.
 Network play (DirectPlay stand-in has no connections). Frame-time and CPU measurements not taken. The
 Championship and later divisions not played beyond the first race's start.
 

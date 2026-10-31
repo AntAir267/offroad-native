@@ -2326,7 +2326,16 @@ static GpuImg *rt_sync(Surface *s)
     if (ph < 1) ph = 1;
     if (g && (g->w != pw || g->h != ph)) {
         GpuImg *n = rt_new(s, pw, ph);
-        if (!g->cpu_newer) {
+        if (fabsf((float)g->w / (float)g->h - (float)pw / (float)ph) > 0.01f) {
+            /* a new shape (the Widescreen row): the old picture stretched would stay in the side
+               space, where nothing draws. Black until the game's next frame. */
+            VkClearColorValue black = {{0, 0, 0, 1}};
+            VkImageSubresourceRange rr = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            end_rendering();
+            barrier(n, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cb, n->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rr);
+            n->gpu_newer = 1;
+        } else if (!g->cpu_newer) {
             int a[4] = {0, 0, (int)g->w, (int)g->h}, b[4] = {0, 0, (int)pw, (int)ph};
             blit(g, a, n, b, VK_FILTER_LINEAR);
             n->gpu_newer = g->gpu_newer;

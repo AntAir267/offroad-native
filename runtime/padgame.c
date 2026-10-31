@@ -130,6 +130,8 @@ void padgame_frame(unsigned long frame)
     extern void win_key(int dik, int down);
     extern int bink_active(void);
     mss_frame();                        /* 3D gains follow the listener */
+    extern void menu_frame(void);
+    menu_frame();
     static const struct { int dik, button; } arrows[4] = {{0xC8, PAD_DUP}, {0xD0, PAD_DDOWN}, {0xCB, PAD_DLEFT},
                                                           {0xCD, PAD_DRIGHT}};
     static int down[4], esc;

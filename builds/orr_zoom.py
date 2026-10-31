@@ -51,6 +51,10 @@ HOOKS = {
     # text drawn (ECX the font; x, y, text, ...): the controller's names and prompts
     0x4f9f20: 'bind',
     0x4b5540: 'text',
+    # menu.c: VIDEO's widgets being made (ECX the table), and its screen's handler (ECX the widget, EDX
+    # the message)
+    0x488330: 'video_rows',
+    0x4874f0: 'video_screen',
 }
 CONSTS = {}
 INLINE = {}

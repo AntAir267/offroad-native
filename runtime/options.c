@@ -48,8 +48,8 @@ static const char *const help[][2] = {
     {"display", "display: window or fullscreen (Alt+Enter switches too)"},
     {"resolution", "resolution: native (drawn at the screen's own resolution), original (the game's own "
                    "640x480 / 800x600, scaled up) or a multiple of the game's size such as 2"},
-    {"widescreen", "widescreen: off (4:3 as shipped), or on / a shape such as 16:9: not finished, the race's "
-                   "world still stops at the 4:3 picture's edges (DESIGN.md section 6)"},
+    {"widescreen", "widescreen: on (the race's world as wide as the screen, the same height of view; menus and movies stay 4:3), off "
+                   "(4:3 as shipped), or a shape such as 16:9. GAME OPTIONS > VIDEO has it too"},
     {"antialiasing", "antialiasing: off, or 4x (drawn at twice the size each way and scaled down: smoother "
                      "edges, more work for the graphics card)"},
     {"textures", "textures: original (as the game asks) or smooth (trilinear and anisotropic filtering on "

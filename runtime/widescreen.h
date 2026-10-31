@@ -5,6 +5,7 @@
 void widescreen_init(void);
 void widescreen_options(void);            /* the option changed */
 int widescreen_on(void);
+int widescreen_allowed(void);             /* not in test runs, unless ORR_WIDESCREEN */
 void widescreen_screen(int w, int h);     /* the renderer reports the picture area */
 extern float ws_aspect;                    /* target width / height */
 extern float ws_world_aspect;              /* y/x scale of the widened camera's projection */
