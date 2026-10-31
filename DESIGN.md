@@ -121,7 +121,8 @@ features it lacks (ray query, buffer addresses, non-uniform indexing), none from
 are hardtruck2-native's unchanged. On the RTX 4070: no validation messages through a 3400-frame run into a race. With the Widescreen row (same day): fncheck and lockstep unchanged; switching it on with the pad and racing,
 6000 frames on the RTX 4070: no validation messages. With the button icons (2026-10-31): fncheck and lockstep unchanged (keyboard runs do not load the icons in test
 mode); pad into a race, 3600 frames on the RTX 4070: no validation messages, 10 font images written.
-On the T7 the validation messages go to the game's stdout, not its log.
+With the merged controllers (2026-10-31): fncheck and lockstep unchanged; two pads in a two-player race, widescreen,
+6300 frames on the RTX 4070: no validation messages. On the T7 the validation messages go to the game's stdout, not its log.
 
 ## T7
 tools/dev/translator_check.sh runs fncheck and lockstep. On the T7 third_party/sdl3 and .venv are links to
