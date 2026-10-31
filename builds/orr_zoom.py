@@ -63,6 +63,9 @@ HOOKS = {
     # the message)
     0x488330: 'video_rows',
     0x4874f0: 'video_screen',
+    # game.c: cameras about to take the far plane from data (0x5d0e78): the draw distance option
+    0x4a54b0: 'cameras_file',
+    0x4d94b0: 'race_cameras',
 }
 CONSTS = {}
 INLINE = {}
