@@ -368,6 +368,15 @@ API(BINKW32, _BinkCopyToBuffer_28, 7)
     return 0;
 }
 
+/* a movie is open (padgame.c: the controller's buttons skip it) */
+int bink_active(void)
+{
+    for (int i = 0; i < MAX_MOVIES; i++)
+        if (movies[i].rec)
+            return 1;
+    return 0;
+}
+
 void bink_init(void)
 {
     for (int i = 0; i < MAX_MOVIES; i++)
