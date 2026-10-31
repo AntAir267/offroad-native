@@ -5,6 +5,15 @@
    The joystick the game sees is laid out as Windows gives it an Xbox controller: X, Y the left stick, Z the
    triggers together (RT -, LT +), Rx/Ry the right stick, the D-pad as POV 0, and the buttons
    0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 Back, 7 Start, 8 left stick, 9 right stick, 10 Guide.
+   ANY CONTROLLER WORKS (GAME-GOALS): the game lists its joysticks once, at start-up, and binds player 1 to one of
+   them, so pads[] holds each real controller and the game sees two joysticks that are always there, plugged in
+   or not. Joystick 0 is every controller merged (buttons held on any, each stick from the controller pushing it
+   furthest, each trigger likewise, rumble on all): a controller works whenever it is plugged in, in any order,
+   and a handheld's several devices for one controller (the Win Max shows Generic X-Box pad, Microsoft X-Box
+   360 pad, Handheld Daemon Controller, some silent: etm-native) cannot leave the game on a silent one.
+   Joystick 1 is player 2's, also merged: player 2's menus read only it, so one controller can get through them.
+   In a two-player race only (pad_two_players) the second controller connected leaves joystick 0 and is
+   joystick 1's alone.
    Both sticks get a round dead zone against resting drift (controller_deadzone in options.txt,
    percent, default 6), the rest of the travel stretched over the range. */
 #define _GNU_SOURCE
@@ -28,9 +37,6 @@ static pthread_mutex_t pad_lock = PTHREAD_MUTEX_INITIALIZER;
 static Pad pads[INPUT_MAX_JOYS];
 static double stick_dead = 0.06 * 32767;
 
-/* SDL axis -> joystick axis (see above; the triggers are worked out together) */
-static const int joy_axis[PAD_AXES] = {INPUT_AXIS_X, INPUT_AXIS_Y, INPUT_AXIS_RX, INPUT_AXIS_RY,
-                                       INPUT_AXIS_Z, INPUT_AXIS_Z};
 /* SDL button -> joystick button (-1: the D-pad, the POV) */
 static const int joy_button[PAD_BUTTONS] = {0, 1, 2, 3, 6, 10, 7, 8, 9, 4, 5, -1, -1, -1, -1, 11,
                                             12, 13, 14, 15, -1, -1, -1, -1, -1, -1};
@@ -45,19 +51,129 @@ int input_controller_last(void) { return last_controller; }
 
 /* Plugging a controller in counts as using it (the prompts switch to it); unplugging the last
    one hands them back to the keyboard. */
-int pad_attach(const char *id, const char *name)
+#define GAME_JOYS 2
+static int game_joy[GAME_JOYS] = {-1, -1};
+static int two_players, split_slot = -1;
+
+/* the game's joysticks exist from the start (pad_init), so it has them when it lists them */
+static void game_joys_ensure(void)
 {
     extern const char *padgame_device_name(const char *name);
-    LOG(LOG_INPUT, "controller \"%s\" shown to the game as \"%s\"", name ? name : "?", padgame_device_name(name));
-    name = padgame_device_name(name);
-    int slot = input_joy_attach(id, name, 6, 16, 1);
+    static const char *const ids[GAME_JOYS] = {"controllers", "controllers-2"};
+    for (int j = 0; j < GAME_JOYS; j++)
+        if (game_joy[j] < 0) {
+            game_joy[j] = input_joy_attach(ids[j], padgame_device_name(NULL), 6, 16, 1);
+            if (game_joy[j] >= 0)
+                input_joy_set_ff(game_joy[j], ifc_rumble_wanted());    /* the game plays force feedback as rumble */
+        }
+}
+
+/* the controller that is player 2's: the second connected, in a two-player race (pad_lock held) */
+static void pick_split(void)
+{
+    int seen = 0;
+    split_slot = -1;
+    for (int s = 0; s < INPUT_MAX_JOYS && two_players; s++)
+        if (pads[s].connected && ++seen == 2)
+            split_slot = s;
+}
+
+static int member(int j, int s)
+{
+    if (!pads[s].connected)
+        return 0;
+    return j == 0 ? s != split_slot : !two_players || s == split_slot;
+}
+
+/* does this controller shake with this joystick? (win.c) */
+int pad_rumbles(int joy, int slot)
+{
+    int r = 0;
+    pthread_mutex_lock(&pad_lock);
+    for (int j = 0; j < GAME_JOYS; j++)
+        if (game_joy[j] == joy && slot >= 0 && slot < INPUT_MAX_JOYS)
+            r = member(j, slot);
+    pthread_mutex_unlock(&pad_lock);
+    return r;
+}
+
+/* one joystick's state from its controllers */
+static void send_joy(int j)
+{
+    if (game_joy[j] < 0)
+        return;
+    int out[2][2] = {{0, 0}, {0, 0}}, lt = 0, rt = 0, held[PAD_BUTTONS] = {0};
+    double best[2] = {0, 0};
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS; s++) {
+        if (!member(j, s))
+            continue;
+        for (int st = 0; st < 2; st++) {
+            int x = pads[s].axis[st * 2], y = pads[s].axis[st * 2 + 1];
+            double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
+            if (r * k > best[st]) {
+                best[st] = r * k;
+                out[st][0] = clamp16(x * k);
+                out[st][1] = clamp16(y * k);
+            }
+        }
+        lt = pads[s].axis[PAD_LT] > lt ? pads[s].axis[PAD_LT] : lt;
+        rt = pads[s].axis[PAD_RT] > rt ? pads[s].axis[PAD_RT] : rt;
+        for (int b = 0; b < PAD_BUTTONS; b++)
+            held[b] |= pads[s].button[b];
+    }
+    pthread_mutex_unlock(&pad_lock);
+    int joy = game_joy[j];
+    input_joy_axis(joy, INPUT_AXIS_X, out[0][0]);
+    input_joy_axis(joy, INPUT_AXIS_Y, out[0][1]);
+    input_joy_axis(joy, INPUT_AXIS_RX, out[1][0]);
+    input_joy_axis(joy, INPUT_AXIS_RY, out[1][1]);
+    input_joy_axis(joy, INPUT_AXIS_Z, clamp16(lt - rt));    /* LT +, RT -, as Windows has an Xbox controller */
+    for (int b = 0; b < PAD_BUTTONS; b++)
+        if (joy_button[b] >= 0)
+            input_joy_button(joy, joy_button[b], held[b]);
+    int up = held[PAD_DUP], dn = held[PAD_DDOWN], l = held[PAD_DLEFT], r = held[PAD_DRIGHT], v = INPUT_POV_CENTERED;
+    if (up && r) v = 4500; else if (r && dn) v = 13500;
+    else if (dn && l) v = 22500; else if (l && up) v = 31500;
+    else if (up) v = 0; else if (r) v = 9000; else if (dn) v = 18000; else if (l) v = 27000;
+    input_joy_pov(joy, 0, v);
+}
+
+static void send_all(void)
+{
+    for (int j = 0; j < GAME_JOYS; j++)
+        send_joy(j);
+}
+
+/* a two-player race starts (on) or the front end comes back (off): padgame.c */
+void pad_two_players(int on)
+{
+    LOG(LOG_INPUT, "two players: %d (frame %lu)", on, frame_count);
+    pthread_mutex_lock(&pad_lock);
+    two_players = on;
+    pick_split();
+    pthread_mutex_unlock(&pad_lock);
+    send_all();
+}
+
+int pad_attach(const char *id, const char *name)
+{
+    (void)id;
+    game_joys_ensure();
+    int slot = -1;
+    pthread_mutex_lock(&pad_lock);
+    for (int s = 0; s < INPUT_MAX_JOYS && slot < 0; s++)
+        if (!pads[s].connected)
+            slot = s;
+    if (slot >= 0) {
+        memset(&pads[slot], 0, sizeof pads[slot]);
+        pads[slot].connected = 1;
+        pick_split();
+    }
+    pthread_mutex_unlock(&pad_lock);
+    LOG(LOG_INPUT, "controller \"%s\" connected (%d)", name ? name : "?", slot);
     if (slot < 0)
         return -1;
-    input_joy_set_ff(slot, ifc_rumble_wanted());    /* the game plays force feedback as rumble */
-    pthread_mutex_lock(&pad_lock);
-    memset(&pads[slot], 0, sizeof pads[slot]);
-    pads[slot].connected = 1;
-    pthread_mutex_unlock(&pad_lock);
     input_used(1);
     active_slot = slot;
     return slot;
@@ -70,12 +186,13 @@ void pad_detach(int slot)
 {
     if (slot < 0 || slot >= INPUT_MAX_JOYS)
         return;
-    input_joy_disconnect(slot);
     pthread_mutex_lock(&pad_lock);
     memset(&pads[slot], 0, sizeof pads[slot]);
+    pick_split();
     pthread_mutex_unlock(&pad_lock);
     if (active_slot == slot)
         active_slot = -1;
+    send_all();                         /* (what the unplugged one held lets go) */
     if (!pad_count())
         input_used(0);
 }
@@ -86,23 +203,12 @@ void pad_axis(int slot, int axis, int value)
         return;
     pthread_mutex_lock(&pad_lock);
     pads[slot].axis[axis] = value;
-    int x = pads[slot].axis[axis & ~1], y = pads[slot].axis[axis | 1];
     pthread_mutex_unlock(&pad_lock);
     if (abs(value) > 12000) {
         input_used(1);
         active_slot = slot;
     }
-    if (axis >= PAD_LT) {                /* Z: LT (0..32767) +, RT -, as Windows has an Xbox controller */
-        pthread_mutex_lock(&pad_lock);
-        int y = pads[slot].axis[PAD_LT] - pads[slot].axis[PAD_RT];
-        pthread_mutex_unlock(&pad_lock);
-        input_joy_axis(slot, INPUT_AXIS_Z, clamp16(y));
-        return;
-    }
-    /* a stick: round dead zone, the rest of the travel stretched over the full range */
-    double r = hypot(x, y), k = r > stick_dead ? (r - stick_dead) / (32767 - stick_dead) * 32767 / r : 0;
-    input_joy_axis(slot, joy_axis[axis & ~1], clamp16(x * k));
-    input_joy_axis(slot, joy_axis[axis | 1], clamp16(y * k));
+    send_all();
 }
 
 void pad_button(int slot, int button, int down)
@@ -110,28 +216,13 @@ void pad_button(int slot, int button, int down)
     if (slot < 0 || slot >= INPUT_MAX_JOYS || button < 0 || button >= PAD_BUTTONS)
         return;
     if (down) {
-        static const char *const bn[PAD_BUTTONS] = {"A", "B", "X", "Y", "Back", "Guide", "Start", "LS", "RS",
-            "LB", "RB", "Up", "Down", "Left", "Right", "Misc"};
-        LOG(LOG_ALWAYS, "controller %d: %s", slot, bn[button] ? bn[button] : "?");
         input_used(1);
         active_slot = slot;
-        video_skip_press();             /* (any button skips a movie: bink.c) */
     }
     pthread_mutex_lock(&pad_lock);
-    Pad *p = &pads[slot];
-    p->button[button] = down != 0;
-    int up = p->button[PAD_DUP], dn = p->button[PAD_DDOWN], l = p->button[PAD_DLEFT], r = p->button[PAD_DRIGHT];
+    pads[slot].button[button] = down != 0;
     pthread_mutex_unlock(&pad_lock);
-    if (button >= PAD_DUP && button <= PAD_DRIGHT) {
-        int v = INPUT_POV_CENTERED;
-        if (up && r) v = 4500; else if (r && dn) v = 13500;
-        else if (dn && l) v = 22500; else if (l && up) v = 31500;
-        else if (up) v = 0; else if (r) v = 9000; else if (dn) v = 18000; else if (l) v = 27000;
-        input_joy_pov(slot, 0, v);
-    } else {
-        if (joy_button[button] >= 0)
-            input_joy_button(slot, joy_button[button], down);
-    }
+    send_all();
 }
 
 int pad_held(int button)
@@ -158,9 +249,9 @@ int pad_axis_value(int axis)
 /* At exit: every controller's motors stopped */
 void ifc_exit(void)
 {
-    for (int s = 0; s < INPUT_MAX_JOYS; s++)
-        if (pads[s].connected)
-            input_joy_rumble(s, 0, 0, 0);
+    for (int j = 0; j < GAME_JOYS; j++)
+        if (game_joy[j] >= 0)
+            input_joy_rumble(game_joy[j], 0, 0, 0);
 }
 
 int pad_count(void)
@@ -175,9 +266,9 @@ int pad_count(void)
 
 /* ------------------------------------------------------------------ ORR_PAD */
 /* axis: 0 a button, 1 an axis, 2 plugging (index 0 unplug, 1 the controller, 2 another one) */
-typedef struct { unsigned long at, release; int axis, index, value, hold, state; } PadPress;
+typedef struct { unsigned long at, release; int axis, index, value, hold, state, second; } PadPress;
 static PadPress *script;
-static int nscript, script_slot = -1;
+static int nscript, script_slot = -1, script_slot2 = -1;
 static const char *const plug_names[3] = {"UNPLUG", "PLUG", "PLUG2"};
 
 static const struct { const char *name; int button; } button_names[] = {
@@ -201,6 +292,8 @@ void pad_init(void)
 {
     pad_options();
     const char *env = getenv("ORR_PAD");
+    if (!deterministic || env)          /* (keyboard test runs stay as the original, for the lockstep check) */
+        game_joys_ensure();
     if (!env || !*env)
         return;
     char *copy = strdup(env), *save = NULL;
@@ -217,13 +310,20 @@ void pad_init(void)
             *star = 0;
             hold = atoi(star + 1) > 0 ? atoi(star + 1) : 1;
         }
-        PadPress p = {at, 0, 0, -1, 1, hold, 0};
+        PadPress p = {at, 0, 0, -1, 1, hold, 0, 0};
+        if (!strcasecmp(name, "JOIN")) {        /* a second controller comes along; "2.A" etc. are its */
+            p.axis = 3;
+            p.index = 0;
+        } else if (!strncmp(name, "2.", 2)) {
+            p.second = 1;
+            name += 2;
+        }
         for (int k = 0; k < 3 && !eq; k++)
             if (!strcasecmp(name, plug_names[k])) {
                 p.axis = 2;
                 p.index = k;
             }
-        if (p.axis == 2) {
+        if (p.axis >= 2) {
         } else if (eq) {
             *eq = 0;
             p.axis = 1;
@@ -253,7 +353,7 @@ void pad_init(void)
         return;
     }
     script_slot = pad_attach("insane-pad-script", "Scripted controller");
-    LOG(LOG_ALWAYS, "ORR_PAD: controller connected as joystick %d, %d scripted inputs", script_slot, nscript);
+    LOG(LOG_ALWAYS, "ORR_PAD: controller connected (%d), %d scripted inputs", script_slot, nscript);
 }
 
 static void script_plug(unsigned long frame, int which)
@@ -286,12 +386,18 @@ void pad_frame(unsigned long frame)
         }
         if (down < 0)
             continue;
-        if (s->axis == 2) {
+        int slot = s->second ? script_slot2 : script_slot;
+        if (s->axis == 3) {
+            if (down && script_slot2 < 0) {
+                script_slot2 = pad_attach("insane-pad-script-b", "Second scripted controller");
+                LOG(LOG_ALWAYS, "ORR_PAD: frame %lu: a second controller joined", frame);
+            }
+        } else if (s->axis == 2) {
             if (down)
                 script_plug(frame, s->index);
         } else if (s->axis) {
             LOG(LOG_ALWAYS, "ORR_PAD: frame %lu: %s = %d", frame, axis_names[s->index], down ? s->value : 0);
-            pad_axis(script_slot, s->index, down ? s->value : 0);
+            pad_axis(slot, s->index, down ? s->value : 0);
         } else {
             const char *n = "?";
             for (size_t b = 0; b < sizeof button_names / sizeof *button_names; b++)
@@ -300,7 +406,7 @@ void pad_frame(unsigned long frame)
                     break;
                 }
             LOG(LOG_ALWAYS, "ORR_PAD: frame %lu: %s %s", frame, n, down ? "down" : "up");
-            pad_button(script_slot, s->index, down);
+            pad_button(slot, s->index, down);
         }
     }
     padgame_frame(frame);

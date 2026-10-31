@@ -5,9 +5,9 @@
    "Controller (XBOX 360 For Windows) (Port 0)" here: 620 bytes, a float version, device count, the active
    one, then per device its name (100 bytes), 4 flag bytes and 10 action names of 20 bytes (steer left,
    steer right, accelerate, brake, handbrake, rear view, camera, gear up, gear down, nitrous)
-   [verified: 0x461a10, 0x461b10, 0x461180]. So every controller is shown under that name, and the first
-   start writes the user folder's copy with the controller active and an Xbox layout. The game's own
-   controller screen changes it from then on.
+   [verified: 0x461a10, 0x461b10, 0x461180]. So the game's joysticks (pad.c: any controller, always there) are shown
+   under that name, and the first start writes the user folder's copies with them active and an Xbox layout.
+   The game's own controller screen changes it from then on.
 
    The front end reads the controller itself: FESelect on buttons 1-8, LookRight_Left and LookUp_Down
    on the left stick (0x461f00, once the player's device is a controller) [verified: decompile]. bind_hook
@@ -41,55 +41,93 @@
 #include <sys/stat.h>
 
 #define PAD_DEVICE "Controller (XBOX 360 For Windows)"
-#define PAD_ENTRY PAD_DEVICE " (Port 0)"
 #define DEVICE_SIZE (100 + 4 + 200)
 
 const char *padgame_device_name(const char *name) { (void)name; return PAD_DEVICE; }
 int ifc_rumble_wanted(void) { return 1; }
 
-static void pad_block(uint8_t *b)
+static void pad_block(uint8_t *b, int port)
 {
     static const char *const actions[10] = {"X-axis", "X-axis", "JOYSTICK_ZNEG", "JOYSTICK_ZPOS", "GAMEPAD_1",
                                             "GAMEPAD_3", "GAMEPAD_4", "GAMEPAD_6", "GAMEPAD_5", "GAMEPAD_2"};
     memset(b, 0, DEVICE_SIZE);
-    strcpy((char *)b, PAD_ENTRY);
+    snprintf((char *)b, 100, PAD_DEVICE " (Port %d)", port);
     static const uint8_t flags[4] = {1, 1, 1, 1};    /* the second is Force Feedback [verified: its screen]; the rest as Windows wrote them */
     memcpy(b + 100, flags, 4);
     for (int i = 0; i < 10; i++)
         strcpy((char *)b + 104 + i * 20, actions[i]);
 }
 
-/* the user folder's Configs\p1controll.cfg, once: the game's keyboard entry, the controller active */
+/* the user folder's p1controll.cfg and p2controll.cfg, once: the game's keyboard entry, then the two
+   joysticks (pad.c), player 1 on the first and player 2 on the second. The active device's number less one
+   is the joystick the game binds to (0x460970). */
 static void write_bindings(void)
 {
-    char path[1200];
-    FILE *f;
-    snprintf(path, sizeof path, "%s/configs/p1controll.cfg", user_dir);
-    if ((f = fopen(path, "rb"))) {
-        fclose(f);
-        return;
-    }
-    uint8_t d[12 + 2 * DEVICE_SIZE];
-    size_t n = 0;
-    if (path_to_host("Configs\\p1controll.cfg", path, sizeof path, 0) && (f = fopen(path, "rb"))) {
-        n = fread(d, 1, sizeof d, f);
-        fclose(f);
-    }
-    if (n < 12 + DEVICE_SIZE || strncasecmp((char *)d + 12, "keyboard", 8))
-        return;                         /* the game then writes its own, keyboard first */
-    uint32_t count = 2, active = 1;
-    memcpy(d + 4, &count, 4);
-    memcpy(d + 8, &active, 4);
-    pad_block(d + 12 + DEVICE_SIZE);
-    path_to_host("Configs\\p1controll.cfg", path, sizeof path, 1);
-    if ((f = fopen(path, "wb"))) {
-        fwrite(d, 1, sizeof d, f);
-        fclose(f);
-        LOG(LOG_ALWAYS, "controller bindings written in %s", path);
+    for (int player = 1; player <= 2; player++) {
+        char path[1200], win[64];
+        FILE *f;
+        snprintf(path, sizeof path, "%s/configs/p%dcontroll.cfg", user_dir, player);
+        if ((f = fopen(path, "rb"))) {
+            fclose(f);
+            continue;
+        }
+        snprintf(win, sizeof win, "Configs\\p%dcontroll.cfg", player);
+        uint8_t d[12 + 3 * DEVICE_SIZE];
+        size_t n = 0;
+        if (path_to_host(win, path, sizeof path, 0) && (f = fopen(path, "rb"))) {
+            n = fread(d, 1, sizeof d, f);
+            fclose(f);
+        }
+        if (n < 12 + DEVICE_SIZE || strncasecmp((char *)d + 12, "keyboard", 8))
+            continue;                   /* the game then writes its own, keyboard first */
+        uint32_t count = 3, active = (uint32_t)player;
+        memcpy(d + 4, &count, 4);
+        memcpy(d + 8, &active, 4);
+        pad_block(d + 12 + DEVICE_SIZE, 0);
+        pad_block(d + 12 + 2 * DEVICE_SIZE, 1);
+        path_to_host(win, path, sizeof path, 1);
+        if ((f = fopen(path, "wb"))) {
+            fwrite(d, 1, sizeof d, f);
+            fclose(f);
+            LOG(LOG_ALWAYS, "controller bindings written in %s", path);
+        }
     }
 }
 
 static uint32_t guest(const char *s) { return gstrdup(s); }
+
+/* The race's controls: player 1 is bound to one device (0x460970), the controller. The keyboard's keys are
+   bound as well, so it drives too, and whether it is a two-player race tells pad.c who the second
+   controller belongs to. */
+static int race_controls_hook(CPU *c)
+{
+    uint32_t game = c->ecx, keep = c->ecx;
+    F_00460970_orig(c);
+    pad_two_players(R32(game + 0x4ec) == 2);
+    uint32_t player = R32(game + 0x10bc);
+    if (R32(player + 0x10) >= 1) {
+        static uint32_t buf;
+        if (!buf)
+            buf = galloc(256);
+        uint32_t keyboard = R32(player + 4);     /* the list's first */
+        for (uint32_t i = 0; i < 10; i++) {
+            c->ecx = keyboard;
+            if (guest_call(c, 0x461180, 4, i, buf, 0u, R32(player)) & 0xff) {
+                c->ecx = R32(0x5d1680);
+                guest_call(c, 0x402640, 1, buf);
+            }
+        }
+    }
+    c->ecx = keep;
+    return 1;
+}
+
+static int front_end_hook(CPU *c)
+{
+    (void)c;
+    pad_two_players(0);
+    return 0;
+}
 
 static int bind_hook(CPU *c)
 {
@@ -332,6 +370,8 @@ void padgame_init(void)
     write_bindings();
     hook_bind = bind_hook;
     hook_text = text_hook;
+    hook_race_controls = race_controls_hook;
+    hook_front_end = front_end_hook;
     if (icons_wanted()) {
         write_font_images();
         hook_font_chars = font_chars_hook;

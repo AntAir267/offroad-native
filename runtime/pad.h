@@ -11,7 +11,7 @@ enum { PAD_LX, PAD_LY, PAD_RX, PAD_RY, PAD_LT, PAD_RT, PAD_AXES };
 
 /* The joystick the game sees: see pad.c (X, Y the left stick, Z the triggers together, Xbox
    button order). */
-int pad_attach(const char *id, const char *name);   /* returns the joystick slot, -1 if none free */
+int pad_attach(const char *id, const char *name);   /* returns the controller's slot, -1 if none free */
 void pad_detach(int slot);
 void pad_axis(int slot, int axis, int value);        /* sticks -32768..32767 (+ = right/down), triggers 0..32767 */
 void pad_button(int slot, int button, int down);
@@ -19,6 +19,8 @@ void pad_button(int slot, int button, int down);
 /* The current state of every connected controller together (for menu navigation). */
 int pad_held(int button);
 int pad_axis_value(int axis);                         /* the one furthest from rest */
+int pad_rumbles(int joy, int slot);                   /* does this controller shake with this joystick? */
+void pad_two_players(int on);                         /* a two-player race: the second controller is player 2's */
 int pad_prompts(void);                                /* a controller was the device used last */
 int pad_count(void);                                  /* controllers connected */
 int pad_active_slot(void);                            /* the one used last (a button, or a stick or trigger well off rest), -1 none */
@@ -27,6 +29,7 @@ int pad_active_slot(void);                            /* the one used last (a bu
    calls as SDL's gamepad events: "frame:BUTTON*hold,frame:AXIS=value*hold,...", e.g.
    "900:A*10,1600:LX=-32768*60,1700:RT=32767*300". Buttons: A B X Y BACK GUIDE START LS RS LB
    RB UP DOWN LEFT RIGHT (the D-pad); axes: LX LY RX RY LT RT (back to rest after the hold).
+   "frame:JOIN" a second controller alongside, its inputs "frame:2.A", "frame:2.RT=32767*60".
    "frame:PLUG", "frame:UNPLUG", "frame:PLUG2" (another controller, swapped in): if the first
    of these plugs one in, there is no controller at start-up.
    pad_init also reads controller_deadzone from options.txt; call it before the game starts. */

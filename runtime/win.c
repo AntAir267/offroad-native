@@ -70,9 +70,11 @@ static int rumble_on = 1;            /* Enhanced option "rumble" */
 
 static void rumble(int slot, uint16_t low, uint16_t high, uint32_t ms)
 {
-    if (!rumble_on || slot < 0 || slot >= MAXPADS || !pad_of_slot[slot])
+    if (!rumble_on)
         return;
-    SDL_RumbleGamepad(pad_of_slot[slot], low, high, ms == 0xffffffffu ? 0xffffffffu : ms);
+    for (int i = 0; i < MAXPADS; i++)   /* slot: the game's joystick; its controllers shake (pad.c) */
+        if (pad_of_slot[i] && pad_rumbles(slot, i))
+            SDL_RumbleGamepad(pad_of_slot[i], low, high, ms == 0xffffffffu ? 0xffffffffu : ms);
 }
 
 /* ------------------------------------------------------------------ controllers (pad.c) */

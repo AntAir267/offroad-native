@@ -51,6 +51,10 @@ HOOKS = {
     # text drawn (ECX the font; x, y, text, ...): the controller's names and prompts
     0x4f9f20: 'bind',
     0x4b5540: 'text',
+    # a race's controls set up (ECX the game: +0x10bc player 1, +0x4ec players)
+    0x460970: 'race_controls',
+    # the front end being loaded (at start and back from a race): every controller is player 1's again
+    0x43a5a0: 'front_end',
     # padgame.c: a font's characters read (ECX the font, first argument the .dat's path); one character
     # drawn (ECX the glyph, arguments the batch and the colour): the button icons
     0x4b7a30: 'font_chars',

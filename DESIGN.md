@@ -62,7 +62,7 @@ Flat drawings have one rhw for all vertices (HUD and menus 1, the sky's backdrop
 the width fills the screen (backdrop, the pause tint), and one in the outer thirds goes to that edge.
 Dropped: a wide game mode (ResolutionX 1366). Its HUD and menus scale by width / 640 and height / 480 and
 the gauge by width on both axes, off the bottom of the screen.
-Verified at 1920x1080 on the 890M: race, HUD, pause menu, menus and movies. Not checked: split screen.
+Verified at 1920x1080 on the 890M: race, HUD, pause menu, menus and movies. Split screen checked with two pads (7b).
 0x413830 reads the camera's width / 640 for its size (a world effect [guess: sprites]): may be 1/3 wider.
 GAME OPTIONS > VIDEO has a Widescreen row (menu.c, see its head comment): a real row made by the game's own
 functions, so it has the arrows, sounds, help line and controller support. Brightness moved up 14 to fit
@@ -86,6 +86,19 @@ drawn for this project (tools/make_pad_icons.py, runtime/pad_icons.h), as lr2-na
 in the game. A screen keeps what it opened with, and only the next screen follows a change of device.
 "Waiting For Input - Escape To Cancel" stays: Escape is what cancels there.
 Verified with the scripted pad, off-screen. A real pad and rumble are not tested.
+
+### 7b. Every controller works (2026-10-31, Ant's rule, GAME-GOALS.md)
+The fork from hardtruck2-native had one joystick per controller, and the game binds player 1 to one and lists
+them once at start-up: only the first drove, and one plugged in later not at all. pad.c now has two joysticks
+that are always there, fed by the real controllers merged (as etm-native; the Win Max shows three devices for
+one controller). Joystick 0 is player 1's, joystick 1 player 2's: player 2's menus read only it, so in menus both
+get every controller. In a two-player race (0x460970, game+0x4ec == 2) the second connected is joystick 1's
+alone, until the front end loads again (0x43a5a0). The race's start re-binds the menus' controls
+(0x4d72b0 > 0x461f00), so those binds cannot mark leaving a race [verified: log]. race_controls_hook also binds
+the keyboard's keys, so it drives with the controller active.
+Verified, scripted: plugged in after start at frame 2900; second of two; keyboard alone; two-player split screen
+in widescreen, each pad its own car, through a pause. On a handheld with several devices the "second connected"
+in a two-player race may be the same physical controller [guess: not tried].
 
 ### 8. Not done yet (next)
 Other port options (resolution, frame limit, ...) are options.txt only: the Video screen has no more room
