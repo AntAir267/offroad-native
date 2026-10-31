@@ -24,6 +24,10 @@ API(OLE32, CoCreateInstance, 5)
     uint32_t hr = dsound_cocreate(clsid, iid, ARG(4));
     if (hr != 0x80040154u)
         return hr;
+    extern uint32_t dplay_cocreate(uint32_t clsid, uint32_t riid, uint32_t ppv);
+    hr = dplay_cocreate(clsid, iid, ARG(4));
+    if (hr != 0x80040154u)
+        return hr;
     LOG(LOG_ALWAYS, "CoCreateInstance({" GUID_FMT "}, iid {" GUID_FMT "}): not available",
         GUID_ARGS(clsid), GUID_ARGS(iid));
     if (ARG(4)) W32(ARG(4), 0);
