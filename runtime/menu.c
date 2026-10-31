@@ -1,7 +1,7 @@
 /* The port's options in the game's own menu: GAME OPTIONS > VIDEO > More Options.
 
    The front end's screens are widgets in a table by id (0x4702f0; the table is [0x5ce2c4]+0x4b0, 0x190
-   ids; the game uses most above 0x142 too: 0x161..0x16b are free [verified: no immediate of them in its code]). 0x488330 makes VIDEO's: a screen 0x12f and rows 0x130..0x136, Back 0x137, each a
+   ids; the game uses most above 0x142 too: 0x159, 0x15e, 0x15f, 0x161..0x168 are free [verified: no immediate of them in its code]). 0x488330 makes VIDEO's: a screen 0x12f and rows 0x130..0x136, Back 0x137, each a
    0xc4-byte widget (0x46b0e0) with a handler: fastcall(widget, message), the message's first dword its kind, the
    widget's id at +0x28 [verified: disassembly of 0x4874f0, 0x487850 the Shadows row, 0x4881d0 Back]:
    a row: 0 made, 0x456950(id, label; x, y, 0, 0, width, height, items, &value, 0, count, 0), items being pairs of
@@ -21,10 +21,10 @@
 #include "funcs.h"
 
 #define G_NEW 0x56cd7au                  /* operator new */
-#define BUTTON_MORE 0x161u
-#define PAGE 0x162u
-#define PAGE_BACK 0x163u
-#define ROW_FIRST 0x164u               /* up to 0x16b */
+#define BUTTON_MORE 0x15eu
+#define PAGE 0x15fu
+#define PAGE_BACK 0x159u
+#define ROW_FIRST 0x161u               /* up to 0x168 */
 #define VIDEO 0x12fu
 #define PARENT 0x118u
 
@@ -42,10 +42,11 @@ static Row rows[] = {
     {"textures", "Texture Filtering", "Sharper Textures At A Distance", 2, {"Original", "Smooth"}, {"original", "smooth"}, 0, 0, 0},
     {"colour_precision", "Colour Precision", "Less Banding In The Sky And Fog", 2, {"Original", "High"}, {"original", "high"}, 0, 0, 0},
     {"draw_distance", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0},
+    {"ambient_occlusion", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
 };
 #define NROWS ((int)(sizeof rows / sizeof *rows))
 
-static float fl_y(int i) { return 111.0f + 44.0f * (float)i; }
+static float fl_y(int i) { return 96.0f + 42.0f * (float)i; }
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 static uint32_t fast(CPU *c, uint32_t fn, uint32_t a, uint32_t b)

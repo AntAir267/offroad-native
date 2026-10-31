@@ -51,6 +51,7 @@
 #include "shaders/present.frag.spv.h"
 #include "shaders/resolve.frag.spv.h"
 #include "shaders/ao.frag.spv.h"
+#include "shaders/ssao.frag.spv.h"
 #include "shaders/draw.vert.motion.spv.h"
 #include "shaders/tnl.vert.motion.spv.h"
 #include "shaders/draw.frag.motion.spv.h"
@@ -510,6 +511,9 @@ static int fi;
 static VkCommandBuffer cb;
 
 static GpuImg *r_color, *r_depth;
+static int ssao_on, ssao_done, ssao_world;
+static float ssao_a, ssao_b;
+static void ssao_passes(GpuImg *c, GpuImg *z);
 static int bg_phase = 1;          /* widescreen: still in the frame's leading background tiles */
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
@@ -839,6 +843,8 @@ void vkr_options(void)
         sc_stale = 1;
     }
     tex_smooth = !strcasecmp(option_str("textures", "original"), "smooth");
+    ssao_on = !strcasecmp(option_str("ambient_occlusion", "off"), "on");
+    vk_smoke_depth = ssao_on;             /* its passes read the depth buffer */
     const char *cp = option_str("colour_precision", "original");
     hp_want = !strcasecmp(cp, "high");
     if (!hp_want && strcasecmp(cp, "original"))
@@ -3746,32 +3752,47 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     /* Off-Road (widescreen.c): the world comes as screen coordinates past the 4:3 picture's sides, which
        land in the side space as they are: only the scissor grows. Flat drawings have one rhw for all
        their vertices (the HUD and menus 1, the sky's backdrop 2). In a race one filling the width fills
-       the screen and one wholly in the left or right third goes to that edge. */
-    if (pretransformed && !k && c->ox > 0.5f) {
-        float x0 = 1e9f, x1 = -1e9f, w0 = 1e9f, w1 = -1e9f, W = (float)c->lw;
+       the screen and one wholly in the left or right third goes to that edge. The first flat
+       one after the world is the moment for the ambient occlusion. */
+    if (pretransformed && !k) {
+        float x0 = 1e9f, x1 = -1e9f, w0 = 1e9f, w1 = -1e9f, z0 = 0, z1 = 0, W = (float)c->lw;
         for (int i = 0; i < nv; i++) {
             x0 = v[i].x < x0 ? v[i].x : x0;
             x1 = v[i].x > x1 ? v[i].x : x1;
-            w0 = v[i].w < w0 ? v[i].w : w0;
-            w1 = v[i].w > w1 ? v[i].w : w1;
+            if (v[i].w < w0) { w0 = v[i].w; z0 = v[i].z; }
+            if (v[i].w > w1) { w1 = v[i].w; z1 = v[i].z; }
         }
-        int race = wide_world || wide_world_last;
-        if (w0 != w1) {
-            if (x0 < -1.0f || x1 > W + 1.0f)
-                race = wide_world = 1;
-            if (race)
-                half *= ws_aspect / (4.0f / 3.0f);
-        } else if (race && x1 - x0 >= 0.98f * W) {
-            place = 2;
-            mid = (vx + vw / 2.0f) * c->sx;
-            half = vw * c->sx / 2.0f;
-            hp = 0.5f * c->sx;
-        } else if (race) {
-            if (x1 <= 0.35f * W)
-                shift = -c->ox;
-            else if (x0 >= 0.65f * W)
-                shift = c->ox;
-            mid += shift;
+        int flat = w0 == w1;
+        if (!flat) {
+            ssao_world = 1;
+            if (w1 > w0 * 1.2f && w0 > 0.0f && r[RS_ZWRITEENABLE]) {   /* z = a + b / w, from this draw's two ends */
+                ssao_b = (z0 - z1) / (1.0f / w0 - 1.0f / w1);
+                ssao_a = z0 - ssao_b / w0;
+            }
+        }
+        if (ssao_on && flat && w0 < 1.5f && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
+            ssao_done = 1;
+            ssao_passes(c, z);
+        }
+        if (c->ox > 0.5f) {
+            int race = wide_world || wide_world_last;
+            if (!flat) {
+                if (x0 < -1.0f || x1 > W + 1.0f)
+                    race = wide_world = 1;
+                if (race)
+                    half *= ws_aspect / (4.0f / 3.0f);
+            } else if (race && x1 - x0 >= 0.98f * W) {
+                place = 2;
+                mid = (vx + vw / 2.0f) * c->sx;
+                half = vw * c->sx / 2.0f;
+                hp = 0.5f * c->sx;
+            } else if (race) {
+                if (x1 <= 0.35f * W)
+                    shift = -c->ox;
+                else if (x0 >= 0.65f * W)
+                    shift = c->ox;
+                mid += shift;
+            }
         }
     }
     /* Race HUD in widescreen: a piece drawn by the HUD routines moves to the screen edge it is
@@ -4572,6 +4593,72 @@ static void ao_passes(GpuImg *c, int x0, int y0, int x1, int y1, int timed, uint
     if (timed)
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, st_queries, tsb + 5);
     ao_pass(c, &pc, sv.v.ao == 1 ? 4 : 3, att_ao[0], x0, y0, x1, y1);
+}
+
+/* Off-Road's ambient occlusion: shaders/ssao.frag, from the depth buffer, after the world and before the HUD */
+static VkShaderModule sm_ssao;
+typedef struct { uint32_t a[4]; float b[4], c[4], f[4]; } PushSsao;
+_Static_assert(sizeof(PushSsao) <= sizeof(PushDraw), "push constant range");
+
+static VkPipeline ssao_pipeline(int pass, VkFormat color)
+{
+    uint32_t key = 0x10000000u | (uint32_t)pass;
+    for (int i = 0; i < npipes; i++)
+        if (pipes[i].key == key && pipes[i].color == color)
+            return pipes[i].p;
+    if (npipes == COUNT(pipes))
+        fatal("Vulkan: too many pipelines");
+    if (!sm_ssao)
+        sm_ssao = shader(spv_ssao_frag, sizeof spv_ssao_frag);
+    Pipe *p = &pipes[npipes++];
+    p->key = key;
+    p->depth = VK_FORMAT_UNDEFINED;
+    p->color = color;
+    spec_pass = pass;
+    p->p = pipeline_create(sm_pv, sm_ssao, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, pass == 3, VK_BLEND_FACTOR_ZERO,
+                           pass == 3 ? VK_BLEND_FACTOR_SRC_COLOR : VK_BLEND_FACTOR_ZERO, p->color, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
+    spec_pass = -1;
+    return p->p;
+}
+
+static void ssao_pass(GpuImg *g, PushSsao *pc, int pass, GpuImg *in)
+{
+    begin_rendering(g, NULL);
+    if (pass == 3)
+        g->gpu_newer = 1;
+    bind_pipeline(ssao_pipeline(pass, g->format));
+    VkViewport vp = {0, 0, (float)g->w, (float)g->h, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    VkRect2D r = {{0, 0}, {g->w, g->h}};
+    vkCmdSetScissor(cb, 0, 1, &r);
+    pc->a[1] = in ? (uint32_t)in->slot : 0;
+    pc->a[2] = (uint32_t)pass;
+    vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof *pc, pc);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    end_rendering();
+}
+
+static void ssao_passes(GpuImg *c, GpuImg *z)
+{
+    static GpuImg *att[2], *spare[2];
+    uint32_t S = c->h > 1100 ? 2 : 1;     /* about 700 rows or more, whatever the size */
+    uint32_t w = (c->w + S - 1) / S, h = (c->h + S - 1) / S;
+    for (int i = 0; i < 2; i++)
+        aux_img(&att[i], &spare[i], w, h, AO_FORMAT);
+    end_rendering();
+    barrier(z, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    PushSsao pc = {{(uint32_t)z->slot, 0, 0, S}, {ssao_a, ssao_b, 640.0f * c->sy, 2.2f},
+                   {{(float)c->w / 2.0f}, {0}}, {3000.0f, 9000.0f, 0, 0}};
+    pc.c[0] = (float)c->w / 2.0f;
+    pc.c[1] = (float)c->h / 2.0f;
+    pc.c[2] = 160.0f;
+    ssao_pass(att[0], &pc, 0, NULL);
+    barrier(att[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ssao_pass(att[1], &pc, 1, att[0]);
+    barrier(att[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ssao_pass(att[0], &pc, 2, att[1]);
+    barrier(att[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ssao_pass(c, &pc, 3, att[0]);
 }
 
 /* The view's reflective draws again (draw.frag RT_REFLECT, after its ambient occlusion and
@@ -7576,6 +7663,8 @@ void vkr_present(Surface *src, const int *rect)
     bg_phase = 1;
     wide_world_last = wide_world;
     wide_world = 0;
+    ssao_done = 0;
+    ssao_world = 0;
     if (hp_flip && nframes % (unsigned long)hp_flip == 0)
         hp_want ^= 1;
     res_update();                 /* the next frame's render size follows the window */
