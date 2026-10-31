@@ -102,7 +102,8 @@ keyboard, widescreen off (test runs default to off). tools/dev/ws_check.sh, the 
 speed and gear equal at frames 3300, 3600, 3900, 4200 [verified: gauge crops], so it does not change the
 driving; memory is not compared there. Validation on lavapipe: 20 errors, all vkCreateShaderModule for
 features it lacks (ray query, buffer addresses, non-uniform indexing), none from a draw; the shaders
-are hardtruck2-native's unchanged. On the RTX 4070: no validation messages through a 3400-frame run into a race. On the T7 the validation messages go to the game's stdout, not its log.
+are hardtruck2-native's unchanged. On the RTX 4070: no validation messages through a 3400-frame run into a race. With the Widescreen row (same day): fncheck and lockstep unchanged; switching it on with the pad and racing,
+6000 frames on the RTX 4070: no validation messages. On the T7 the validation messages go to the game's stdout, not its log.
 
 ## T7
 tools/dev/translator_check.sh runs fncheck and lockstep. On the T7 third_party/sdl3 and .venv are links to
