@@ -100,9 +100,28 @@ Verified, scripted: plugged in after start at frame 2900; second of two; keyboar
 in widescreen, each pad its own car, through a pause. On a handheld with several devices the "second connected"
 in a two-player race may be the same physical controller [guess: not tried].
 
+### 7c. Upgrades (2026-10-31, Ant chose all four: sharper picture, further, lighting, ray tracing and dust)
+GAME OPTIONS > VIDEO > More Options (menu.c): widescreen, anti-aliasing, texture filtering, colour precision, far draw
+distance, ambient occlusion. Ids 0x159, 0x15e, 0x15f, 0x161..0x168 are free [verified: no immediate in the game's
+code]; 0x183..0x18e are another screen's, and a scan of only its table calls missed that (an earlier build's row at
+0x18f, and a page at 0x186.. overwrote them for a day; never shipped to Ant as more than the row).
+Defaults on: filtering, colour precision, AO, draw distance Far. Anti-aliasing stays off: GPU per frame at 2560x1600
+on the 890M, other builds running, so rough: base 2.4 ms, AO 3.8, filtering 2.6, colour 2.8, 4x 8.0, Extreme far
+2.2 with the game's thread 5.2 against 2.3, all together 14-18.
+Draw distance: game.c raises the far plane (0x5d0e78, x1.5 Far, x2.5 Extreme) where the cameras read it. Draws go from
+89 to about 118 a frame; speed and lap time equal at the frames compared. The one view compared was close up, so
+what it looks like far away has not been judged.
+AO: shaders/ssao.frag, vk.c ssao_passes, from the depth buffer at the first flat draw after the world. z = a + b / w
+fitted from each depth-writing draw's two ends [verified: a 0.982, b -19.6 logged; z rises to a with distance]. The
+inherited ray-traced AO needs geometry this game does not hand over.
+Not done: ray-traced shadows and volumetric dust. Findings (static reading of 1nsane-native's shadows.c, smoke.c):
+the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
+triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
+shadows need world meshes hooked before the game's own transform, code not read yet, and the game's own shadows off.
+Dust needs its particle code found and hooked to feed VkPuff, plus a synthesized camera.
+
 ### 8. Not done yet (next)
-Other port options (resolution, frame limit, ...) are options.txt only: the Video screen has no more room
-without a second page. Play through by Ant. Real audio device and real pad, only scripted so far.
+Resolution and frame limit are options.txt only: More Options has room for two more rows. Play through by Ant. Real audio device and real pad, only scripted so far.
 Network play (DirectPlay stand-in has no connections). Frame-time and CPU measurements not taken. The
 Championship and later divisions not played beyond the first race's start.
 

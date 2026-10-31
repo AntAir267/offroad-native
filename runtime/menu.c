@@ -29,7 +29,7 @@
 #define PARENT 0x118u
 
 typedef struct {
-    const char *key, *label, *hint;
+    const char *key, *default_value, *label, *hint;
     int n;
     const char *text[4], *value[4];
     uint32_t items, cell;
@@ -37,12 +37,12 @@ typedef struct {
 } Row;
 
 static Row rows[] = {
-    {"widescreen", "Widescreen", "Turn Widescreen On or Off", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
-    {"antialiasing", "Anti-Aliasing", "Smoother Edges - Asks More Of The Graphics Card", 2, {"Off", "4x"}, {"off", "4x"}, 0, 0, 0},
-    {"textures", "Texture Filtering", "Sharper Textures At A Distance", 2, {"Original", "Smooth"}, {"original", "smooth"}, 0, 0, 0},
-    {"colour_precision", "Colour Precision", "Less Banding In The Sky And Fog", 2, {"Original", "High"}, {"original", "high"}, 0, 0, 0},
-    {"draw_distance", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0},
-    {"ambient_occlusion", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
+    {"widescreen", "on", "Widescreen", "Turn Widescreen On or Off", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
+    {"antialiasing", "off", "Anti-Aliasing", "Smoother Edges - Asks More Of The Graphics Card", 2, {"Off", "4x"}, {"off", "4x"}, 0, 0, 0},
+    {"textures", "smooth", "Texture Filtering", "Sharper Textures At A Distance", 2, {"Original", "Smooth"}, {"original", "smooth"}, 0, 0, 0},
+    {"colour_precision", "high", "Colour Precision", "Less Banding In The Sky And Fog", 2, {"Original", "High"}, {"original", "high"}, 0, 0, 0},
+    {"draw_distance", "far", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0},
+    {"ambient_occlusion", "on", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
 };
 #define NROWS ((int)(sizeof rows / sizeof *rows))
 
@@ -190,7 +190,7 @@ static void new_widget(CPU *c, uint32_t table, uint32_t id, uint32_t handler)
 
 static int row_value(const Row *r)
 {
-    const char *v = option_str(r->key, r->value[0]);
+    const char *v = option_str(r->key, r->default_value);
     for (int k = 0; k < r->n; k++)
         if (!strcasecmp(v, r->value[k]))
             return k;

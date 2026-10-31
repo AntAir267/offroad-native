@@ -842,10 +842,10 @@ void vkr_options(void)
         want_vsync = v;
         sc_stale = 1;
     }
-    tex_smooth = !strcasecmp(option_str("textures", "original"), "smooth");
-    ssao_on = !strcasecmp(option_str("ambient_occlusion", "off"), "on");
+    tex_smooth = !strcasecmp(option_str("textures", "smooth"), "smooth");
+    ssao_on = !strcasecmp(option_str("ambient_occlusion", "on"), "on");
     vk_smoke_depth = ssao_on;             /* its passes read the depth buffer */
-    const char *cp = option_str("colour_precision", "original");
+    const char *cp = option_str("colour_precision", "high");
     hp_want = !strcasecmp(cp, "high");
     if (!hp_want && strcasecmp(cp, "original"))
         LOG(LOG_ALWAYS, "options: colour_precision \"%s\" is not original or high", cp);

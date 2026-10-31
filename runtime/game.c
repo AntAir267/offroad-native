@@ -13,7 +13,7 @@
 static int far_plane_hook(CPU *c)
 {
     (void)c;
-    const char *v = option_str("draw_distance", "original");
+    const char *v = option_str("draw_distance", "far");
     float k = !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.5f : 1.0f;
     static float base;
     float now = RF32(0x5d0e78);
