@@ -367,7 +367,7 @@ static int sm_steps;              /* ORR_SMOKE_STEPS: every puff's steps (0: by 
 static int sm_scale;              /* ORR_SMOKE_SCALE: the render target's pixels a march pixel each way (0: 2, 4X: 4) */
 static float sm_budget = 10.0f;   /* ORR_SMOKE_BUDGET: the march's work at most (steps over the smaller image's
                                      area, so many times) before the puffs' steps are made coarser */
-static float sm_density = 6.0f;   /* ORR_SMOKE_DENSITY: scales the puffs' density (Off-Road's are far smaller and fainter than 1NSANE's, for which this was 1) */
+static float sm_density = 3.0f;   /* ORR_SMOKE_DENSITY: scales the puffs' density (Off-Road's are far smaller and fainter than 1NSANE's, for which this was 1) */
 static int sm_log;                /* ORR_SMOKE_LOG=1 */
 static int sm_glass = 1;          /* ORR_SMOKE_GLASS=0: puffs behind glass drawn over it (timing) */
 static int sm_shadows = 1;        /* ORR_SMOKE_SHADOWS=0: the puffs cast no shadows */
@@ -1265,7 +1265,13 @@ static GpuImg *img_new(int kind, uint32_t w, uint32_t h, uint32_t levels, VkForm
         VKC(vkCreateImageView(dev, &vi, NULL, &g->view));
     if (usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
         g->slot = slot_alloc();
-        slot_write(g->slot, g->view);
+        if (g->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {   /* (shaders read the depth: a view of that alone) */
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            VKC(vkCreateImageView(dev, &vi, NULL, &g->view2));
+            slot_write(g->slot, g->view2);
+        } else {
+            slot_write(g->slot, g->view);
+        }
     }
     return g;
 }
@@ -1791,12 +1797,17 @@ static VkPipeline pipeline_create(VkShaderModule vs, VkShaderModule fs, VkPrimit
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE,
                             VK_DYNAMIC_STATE_FRONT_FACE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
                             VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-                            VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE, VK_DYNAMIC_STATE_DEPTH_BIAS};
+                            VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE, VK_DYNAMIC_STATE_DEPTH_BIAS,
+                            VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP,
+                            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+                            VK_DYNAMIC_STATE_STENCIL_REFERENCE};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = draw ? COUNT(dyn) : 2, .pDynamicStates = dyn};
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
                                         .colorAttachmentCount = natt, .pColorAttachmentFormats = formats,
-                                        .depthAttachmentFormat = depth};
+                                        .depthAttachmentFormat = depth,
+                                        .stencilAttachmentFormat = depth == VK_FORMAT_D24_UNORM_S8_UINT || depth == VK_FORMAT_D32_SFLOAT_S8_UINT
+                                                                       ? depth : VK_FORMAT_UNDEFINED};
     VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
                                        .stageCount = 2, .pStages = st, .pVertexInputState = &vi,
                                        .pInputAssemblyState = &ia, .pViewportState = &vp, .pRasterizationState = &rs,
@@ -2484,7 +2495,8 @@ static void begin_rendering(GpuImg *c, GpuImg *d)
                                     .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {c->w, c->h}},
                           .layerCount = 1, .colorAttachmentCount = mot ? 5 : mrt ? 3 : 1, .pColorAttachments = ca,
-                          .pDepthAttachment = d ? &da : NULL};
+                          .pDepthAttachment = d ? &da : NULL,
+                          .pStencilAttachment = d && (d->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? &da : NULL};
     vkCmdBeginRendering(cb, &ri);
     st_passes++;
     rendering = 1;
@@ -2494,6 +2506,8 @@ static void begin_rendering(GpuImg *c, GpuImg *d)
     r_mot = mot;
 }
 
+/* the draw's stencil state for set_state: enable, fail, z fail, pass, function, reference, masks (0: off) */
+static uint32_t st_stencil[8];
 static void set_state(const GpuImg *c, const int *sc, VkCullModeFlags cull, int ztest, int zwrite, VkCompareOp op,
                       float bias)
 {
@@ -2513,6 +2527,22 @@ static void set_state(const GpuImg *c, const int *sc, VkCullModeFlags cull, int 
     vkCmdSetDepthCompareOp(cb, op);
     vkCmdSetDepthBiasEnable(cb, bias != 0);
     vkCmdSetDepthBias(cb, bias, 0, 0);
+    /* Direct3D's stencil: its operations and comparisons are Vulkan's, one higher */
+    vkCmdSetStencilTestEnable(cb, st_stencil[0] != 0);
+    if (st_stencil[0]) {
+        const VkStencilFaceFlags fb = VK_STENCIL_FACE_FRONT_AND_BACK;
+        vkCmdSetStencilOp(cb, fb, (VkStencilOp)(st_stencil[1] - 1), (VkStencilOp)(st_stencil[3] - 1),
+                          (VkStencilOp)(st_stencil[2] - 1), (VkCompareOp)(st_stencil[4] - 1));
+        vkCmdSetStencilReference(cb, fb, st_stencil[5] & 255);
+        vkCmdSetStencilCompareMask(cb, fb, st_stencil[6] & 255);
+        vkCmdSetStencilWriteMask(cb, fb, st_stencil[7] & 255);
+    } else {
+        const VkStencilFaceFlags fb = VK_STENCIL_FACE_FRONT_AND_BACK;
+        vkCmdSetStencilOp(cb, fb, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
+        vkCmdSetStencilReference(cb, fb, 0);
+        vkCmdSetStencilCompareMask(cb, fb, 255);
+        vkCmdSetStencilWriteMask(cb, fb, 0);
+    }
 }
 
 static uint32_t pack_rgba(const float *c)
@@ -2625,14 +2655,15 @@ static int pick_device(void)
 
 static int pick_depth_format(void)
 {
-    static const VkFormat cand[] = {VK_FORMAT_X8_D24_UNORM_PACK32, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT,
-                                    VK_FORMAT_D32_SFLOAT_S8_UINT};
+    /* with stencil first: Off-Road masks its water's sky reflection with it */
+    static const VkFormat cand[] = {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                    VK_FORMAT_X8_D24_UNORM_PACK32, VK_FORMAT_D32_SFLOAT};
     for (int i = 0; i < COUNT(cand); i++) {
         VkFormatProperties p;
         vkGetPhysicalDeviceFormatProperties(phys, cand[i], &p);
         if (p.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
             depth24 = cand[i];
-            depth24_stencil = i >= 2;
+            depth24_stencil = i < 2;
             return 1;
         }
     }
@@ -3758,6 +3789,8 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
        one after the world is the moment for the ambient occlusion. */
     if (pretransformed && !k) {
         float x0 = 1e9f, x1 = -1e9f, w0 = 1e9f, w1 = -1e9f, z0 = 0, z1 = 0, W = (float)c->lw;
+        /* (the HUD and menus are at z 0.01 [verified: draw dump]; a flat draw at any other depth, as the sun's flares, is
+           part of the world, and comes and goes with what the camera sees) */
         for (int i = 0; i < nv; i++) {
             x0 = v[i].x < x0 ? v[i].x : x0;
             x1 = v[i].x > x1 ? v[i].x : x1;
@@ -3772,11 +3805,12 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
                 ssao_a = z0 - ssao_b / w0;
             }
         }
-        if (ssao_on && flat && w0 < 1.5f && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
+        int hud = flat && w0 < 1.5f && z0 < 0.02f;
+        if (ssao_on && hud && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
             ssao_done = 1;
             ssao_passes(c, z);
         }
-        if (flat && w0 < 1.5f && ssao_world && smv_depth > 0)
+        if (hud && ssao_world && smv_depth > 0)
             vkr_smoke_view_end();          /* the puffs, over the world and under the HUD */
         if (c->ox > 0.5f) {
             int race = wide_world || wide_world_last;
@@ -3790,7 +3824,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
                 mid = (vx + vw / 2.0f) * c->sx;
                 half = vw * c->sx / 2.0f;
                 hp = 0.5f * c->sx;
-            } else if (race) {
+            } else if (race && hud) {
                 if (x1 <= 0.35f * W)
                     shift = -c->ox;
                 else if (x0 >= 0.65f * W)
@@ -4194,9 +4228,12 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     bind_pipeline(draw_pipeline(topo, blend, blend_factor(sbf, dst_alpha), blend_factor(dbf, dst_alpha),
                                 z ? z->format : VK_FORMAT_UNDEFINED, k != NULL, r_mrt, geo_write));
     draw_mot = 0;
+    if (z && (z->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) && r[52] && r[53] >= 1 && r[54] >= 1 && r[55] >= 1 && r[56] >= 1)
+        memcpy(st_stencil, &r[52], sizeof st_stencil);
     uint32_t zf = r[RS_ZFUNC] >= 1 && r[RS_ZFUNC] <= 8 ? r[RS_ZFUNC] - 1 : VK_COMPARE_OP_LESS_OR_EQUAL;
     set_state(c, sc, cull == 2 ? VK_CULL_MODE_FRONT_BIT : cull == 3 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, ztest,
               zwrite, (VkCompareOp)zf, ztest ? zbias_units(z, r[RS_ZBIAS]) : 0);
+    memset(st_stencil, 0, sizeof st_stencil);
     vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
     vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
     vkCmdBindIndexBuffer(cb, ibuf, ioff, VK_INDEX_TYPE_UINT32);
@@ -7244,9 +7281,13 @@ void vkr_clear(const D3DState *st, int n, const int *rects, uint32_t flags, uint
                                         {.color = clear_color(pix_decode(rs, pix_encode(rs, color)))}};
         c->gpu_newer = 1;
     }
+    VkImageAspectFlags zs = 0;
     if ((flags & 2) && d)
-        att[na++] = (VkClearAttachment){VK_IMAGE_ASPECT_DEPTH_BIT, 0,
-                                        {.depthStencil = {z < 0 ? 0 : z > 1 ? 1 : z, stencil}}};
+        zs |= VK_IMAGE_ASPECT_DEPTH_BIT;
+    if ((flags & 4) && d && (d->aspect & VK_IMAGE_ASPECT_STENCIL_BIT))
+        zs |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    if (zs)
+        att[na++] = (VkClearAttachment){zs, 0, {.depthStencil = {z < 0 ? 0 : z > 1 ? 1 : z, stencil}}};
     clear_rects(c, n, rects, att, na);
     clear_widened = 0;
 }

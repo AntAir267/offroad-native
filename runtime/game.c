@@ -1,9 +1,8 @@
 /* Off-Road's own fixes and hooks (builds/orr_zoom.py HOOKS).
 
    Draw distance: VIDEO's Draw Distance row picks a far plane of 16000, 21000 or 26000 at the race's load
-   (0x4d8630: 0x5d0e78), which the cameras take from there (0x4a54b0 from the track's camera file, 0x4d94b0 the
-   race's own) [verified: decompile]. The More Options row raises what they read. Graphics only: what the
-   game's physics and AI see does not use it [guess: to be checked against a run]. */
+   (0x4d8630: 0x5d0e78), which the cameras take from there [verified: decompile]. The More Options row raises how
+   far they cull: game_camera_set. */
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -14,24 +13,31 @@
 #include "gfx.h"
 #include "vk.h"
 
-static int far_plane_hook(CPU *c)
+/* A camera's far plane, +0x250, comes through 0x4f1350 from the race's setup and again from the camera's own stored
+   values, so a raised one comes back in. 0x4f1350 makes its depth mapping (+0x178, +0x188) from it, and the sky is
+   drawn at a fixed depth that expects the game's (raising 0x5d0e78 outright put the clouds over the banks
+   [verified: frame 4800]). So the mapping is always made from the game's number, and what culls is raised:
+   game_far_base, game_far (widescreen.c viewport_hook). Only numbers the game's own range can give are raised. */
+#define GAME_FAR_MAX 26000.0f
+static float far_scale(void)
 {
-    (void)c;
     const char *v = option_str("draw_distance", "far");
-    float k = !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.5f : 1.0f;
-    static float base;
-    float now = RF32(0x5d0e78);
-    if (now != base * 1.5f && now != base * 2.5f)
-        base = now;                      /* (the game set it afresh for this race) */
-    union { float f; uint32_t u; } u = {base * k};
-    W32(0x5d0e78, u.u);
-    return 0;
+    return !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.5f : 1.0f;
+}
+float game_far_base(float far)
+{
+    return far > GAME_FAR_MAX ? GAME_FAR_MAX : far;
+}
+float game_far(float far)
+{
+    return far >= 16000.0f ? (far > GAME_FAR_MAX ? far : far * far_scale()) : far;
 }
 
 /* Volumetric dust. The game's puffs are objects of a sprite class whose draw (0x53c260) makes one camera-facing
    quad: +0x2c world position, +0x3c, +0x40 half width and height, +0x48 colour (ARGB, its alpha fades), +0x50 shown,
-   +0x64 age [verified: 0x53c0b0, 0x417a30, disassembly of 0x53c260]. The wheels' is 0x57abcc (0x49132d, over 1000 in a
-   lap on dirt), the exhausts' 0x57acf4 (0x4bc717) [verified: spawn log]. With the option on, a puff of these
+   +0x64 age [verified: 0x53c0b0, 0x417a30, disassembly of 0x53c260]. The tailpipe's is 0x57abcc (0x491070, the car's
+   Exhaust objects, 0xff4f4f4f), the wheels' 0x57ad34 (0x4a42e0, a surface's colour) [verified: their code; a first go
+   had them the wrong way round and painted the exhaust tan]. 0x57acf4 (0x4bc5e0) stays a sprite. With the option on, a puff of these
    goes to the volumetric renderer (vk.c, from 1nsane-native) in view space and the sprite is not drawn. That
    renderer reads a Direct3D view and projection, which this game does not use, so it gets a copy of the
    device's state with them made up from the camera (+0x178, +0x188: z = a + b / w; focal length 640). */
@@ -47,8 +53,8 @@ static int puff_draw_hook(CPU *c)
     if (!dust_on || !vk_on())
         return 0;
     uint32_t o = c->ecx, vt = R32(o);
-    int exhaust = vt == 0x57acf4u;
-    if ((vt != 0x57abccu && !exhaust) || !R8(o + 0x50))
+    int exhaust = vt == 0x57abccu;       /* the car's Exhaust objects, 0x491070; the others the wheels' (surface colours) */
+    if ((!exhaust && vt != 0x57ad34u) || !R8(o + 0x50))
         return 0;
     extern const D3DState *d3d_last_state(void);
     const D3DState *ds = d3d_last_state();
@@ -76,16 +82,10 @@ static int puff_draw_hook(CPU *c)
     }
     float vx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / vz - cx) / f * vz,
           vy = (cy - (m[1] * x + m[5] * y + m[9] * z + m[13]) / vz) / f * vz;
-    /* its sprite is about 30 units (30 cm) across, wisps as a volume: a cloud grows as it ages. Graphics only */
-    static float grow = -1.0f, spread;
-    if (grow < 0.0f) {
-        const char *e = getenv("ORR_DUST_GROW"), *e2 = getenv("ORR_DUST_START");
-        grow = e ? (float)atof(e) : 0.12f;
-        spread = e2 ? (float)atof(e2) : 2.0f;
-    }
-    float age = RF32(o + 0x64);
-    float size = (exhaust ? 1.0f : spread + grow * (age > 0.0f ? age : 0.0f));
-    float hw = RF32(o + 0x3c) * size, hh = RF32(o + 0x40) * size;
+    /* the size the game gives it: both grow by themselves (0x417e10, 0x419070 +0x68) */
+    float hw = RF32(o + 0x3c), hh = RF32(o + 0x40);
+    uint32_t alpha = R32(o + 0x48) >> 24;
+    float age = (1.0f - (float)alpha / 255.0f) * 100.0f;
     static D3DState st;
     st = *ds;
     float k = widescreen_on() ? ws_aspect / (4.0f / 3.0f) : 1.0f;
@@ -111,24 +111,25 @@ static int puff_draw_hook(CPU *c)
                           (cy * fw - (m[1] * s[0] + m[5] * s[1] + m[9] * s[2])) / f, fw}, {1.0f, 0.96f, 0.88f}, 2};
         vk_smoke_view_begin(&v);
     }
-    VkPuff p = {exhaust ? VK_PUFF_EXHAUST : VK_PUFF_DUST, o >> 3, 0.0f, RF32(o + 0x64), 0.85f, -1e9f, -hh};
+    VkPuff p = {exhaust ? VK_PUFF_EXHAUST : VK_PUFF_DUST, o >> 3, 1.0f, age, 0.85f, -1e9f, -hh};
     const float q[4][3] = {{vx - hw, vy + hh, vz}, {vx + hw, vy + hh, vz}, {vx - hw, vy - hh, vz}, {vx + hw, vy - hh, vz}};
     const float uv[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
     vk_puff = &p;
-    /* the wheels' fade by darkening their colour (0x417a30 makes +0x48 from +0x7c..+0x84, the colour, times
-       +0x98, what is left): as a volume that is its alpha */
+    /* the tailpipe fades by darkening its grey (0x417a30 makes +0x48 from the colour +0x7c..+0x84 times +0x98): as
+       a volume that is its alpha, and thin: a light grey haze. The wheels' keep the game's surface colour */
     uint32_t diffuse = R32(o + 0x48);
-    if (!exhaust) {
-        float r = RF32(o + 0x7c), gr = RF32(o + 0x80), bl = RF32(o + 0x84), most = r > gr ? (r > bl ? r : bl) : (gr > bl ? gr : bl);
-        float got = (float)((diffuse >> 16 & 255) > (diffuse >> 8 & 255) ? ((diffuse >> 16 & 255) > (diffuse & 255) ? diffuse >> 16 & 255 : diffuse & 255)
-                                                                         : ((diffuse >> 8 & 255) > (diffuse & 255) ? diffuse >> 8 & 255 : diffuse & 255));
+    if (exhaust) {
+        float most = RF32(o + 0x7c), got = (float)(diffuse >> 16 & 255);
         float left = most > 0.01f ? got / (most * 255.0f) : 0.0f;
         left = left > 1.0f ? 1.0f : left;
-        /* the sprite's grey (0xff4f4f4f, 0x491070) is what its texture is tinted by: a volume has no texture, so
-           the earth's colour instead [guess: one colour for every surface; the track's is not read yet] */
-        (void)r; (void)gr; (void)bl;
-        diffuse = (uint32_t)(left * 255.0f) << 24 | 0x94785au;
+        diffuse = (uint32_t)(left * 0.22f * 255.0f) << 24 | 0x9a9a9au;
     }
+    /* (grow 1: the renderer's size history is by serial, and the game reuses objects' addresses: 0 showed a new puff
+       at the size of the one before, a full-screen haze for a frame [verified: frames 4008-4010]) */
+    /* a puff at the camera: nothing to see into, so gone before it fills the screen */
+    float nearby = (vz - hw) / (hw + 60.0f);
+    nearby = nearby < 0.0f ? 0.0f : nearby > 1.0f ? 1.0f : nearby;
+    diffuse = (uint32_t)((float)(diffuse >> 24) * nearby) << 24 | (diffuse & 0xffffffu);
     vk_smoke_take(&st, q, 4, diffuse, uv);
     vk_puff = NULL;
     api_return(c, 1, 1);
@@ -139,8 +140,6 @@ void game_init(void)
 {
     if (!widescreen_allowed())
         return;
-    hook_cameras_file = far_plane_hook;
-    hook_race_cameras = far_plane_hook;
     hook_puff_draw = puff_draw_hook;
     game_options();
 }

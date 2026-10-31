@@ -116,18 +116,27 @@ fitted from each depth-writing draw's two ends [verified: a 0.982, b -19.6 logge
 inherited ray-traced AO needs geometry this game does not hand over.
 T7, 2026-10-31: fncheck and lockstep unchanged (their runs leave the menu page and draw distance out); AO, 4x and Extreme on the RTX 4070, 3900 frames: no validation messages.
 Volumetric dust (game.c puff_draw_hook, on by default, row in More Options): the puff classes share a draw, 0x53c260:
-world position +0x2c, half size +0x3c, +0x40, colour +0x48, age +0x64 [verified: disassembly; spawn log: 0x57abcc from
-0x49132d, the wheels, over 1000 a lap; 0x57acf4 from 0x4bc717]. The hook sends the wheels' and exhausts' to the
-inherited volumetric renderer in view space and skips the sprite. The camera's 0x4f0cb0 matrix is view and
-projection together (column 3 the depth). Made up for it: a D3D state with identity world and view and a
-projection from the camera; depth a + b / w fits D3D's. Changes from a faithful copy, because at 30 cm across the sprites make
-only wisps as volumes: puffs twice the size and growing with age, density 6 (vk.c sm_density), and one earth colour
-instead of the sprite's grey tint [guess: every surface; the road gets tan dust too]. The wheels fade by darkening,
-turned into alpha. Sun direction is a fixed guess, not the track's. Puffs of other classes (0x57ad34 and the rest) stay sprites.
-Dust cost at 2560x1600 on the 890M in a slide, other builds running: GPU 4.0 to 5.1 ms on average, none over 16.7 ms.
-It does not change the race: 3500 frames after a slide with dust on and off, frames with no dust in them are
-pixel-identical (5400, 6000) [verified: --test runs]. T7: fncheck and lockstep unchanged (their runs leave dust off);
-a slide with dust on the RTX 4070, 4600 frames: no validation messages.
+world position +0x2c, half size +0x3c, +0x40, colour +0x48 [verified: disassembly]. The tailpipes' are 0x57abcc (0x491070,
+the car's Exhaust objects, grey 0xff4f4f4f, fade by darkening); the wheels' 0x57ad34 (0x4a42e0, a surface's colour, fade by
+alpha); 0x57acf4 (0x4bc5e0) stays a sprite. A first go took 0x57abcc for wheel dust and painted the exhaust tan (Ant:
+"egregious"). The hook sends them to the inherited volumetric renderer in view space and skips the sprite. The camera's
+0x4f0cb0 matrix is view and projection together (column 3 the depth). Made up for it: a D3D state with identity world and view
+and a projection from the camera. Tailpipe: light grey 0x9a9a9a at 22 % of the alpha. Sizes are the game's. Density 3
+(vk.c sm_density). Puff grow must be 1: the renderer's size history is by serial, and the game reuses objects' addresses, so 0
+showed a new puff at the size of the one before, a full-screen haze for one frame: Ant's "smoke flickering" [verified: frames
+4008-4010, 40 such flashes in 900 frames, 0 after]. Puffs at the camera fade. Sun direction is a fixed guess, not the track's.
+Sun flicker: flat draws at any depth counted as "the HUD has started", so a flare could start AO and the smoke's end
+early, and could be pinned to a screen edge as it crossed a third. HUD now means rhw 1 and z under 0.02. Not looked at directly:
+no test scene had the sun in view.
+Stencil (vk.c): never implemented before, though the game uses it: it writes far depth through a stencil mask (a full-screen
+ZERO, ONE draw, depth ALWAYS, stencil EQUAL 1), then adds the sky's reflection. Without it the whole depth buffer was wiped and
+the sky landed on everything once water was in range: Ant's "sky takes depth priority in water" [verified: frame 4800]. The depth format
+now has stencil; sampled depth uses a depth-only view; stencil is dynamic state.
+Far draw distance: 0x4f1350 makes the depth mapping from the game's far (at most 26000), culling uses the raised one on every
+path that sets a camera (widescreen.c, game_far). Extreme: draws 118 to 155 at frame 4800.
+First-puddle slowdown (Ant): not reproduced. In demo driving the splash samples load at about 142 s with no frame over 30 ms; the only
+hitches are level loads (real-time run: 50 ms, 667 ms). The wiped depth and sky pass may have been its cost [guess]. Needs Ant's retest.
+
 Not done: ray-traced shadows. Findings (static reading of 1nsane-native's shadows.c):
 the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
