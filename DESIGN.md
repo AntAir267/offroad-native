@@ -151,6 +151,12 @@ Dirt, after Ant: "the tire dirt you had previously was better": ramp 10 ticks to
 
 Puddle lag (found from Ant's frame-trace.txt and last-run.log): render wall 25 ms with render CPU 2 ms, so the GPU. Then reproduced with ORR_VK_STATS=2, GPU time a frame at 2560x1440: 5 ms to 24 in the spray. Earlier checks looked at frame wall time only, off-screen, and missed it. Coverage by triangle area: see-through 2.5 screens normally, 25.8 at the peak, three batches of the game's spray sheets. Baked lighting per pixel on these took about 9 ms of it. Now: see-through draws are lit from their corners (draw.vert, light.x 6), and a batch over 5 screens draws every Nth sheet (fans sharing a first vertex; vk.c). Peak 13.6 ms. The spray is a little thinner. Night not explained: Ant saw none there; the one night run with hits had no slow frames. Real play still records itself: frame-trace.txt, "slow frame" lines in last-run.log.
 
+Puddle lag, second round (Ant, on Extreme at night; frame-trace.txt): game CPU 15-19 ms there. Measured at 1440p through a puddle, game CPU mean, max: Far 4.7, 9.4, no frame over 16.7; Extreme at 2.5 times 11.9, 22.2, 133 of 1929 over; Extreme at 2 times 7.7, 15.4, none over. So Extreme is now 2 times the game's distance, and only one splash in three is made (game.c puddle_hit_hook, ret 0x18: six arguments). Spray thinning only on the 64 x 64 spray texture: it had also caught the terrain's blended passes, the checkered floor (Ant).
+
+Car shadows: draw.frag car_box_hit, a soft ray-box test per car, from the sun and from other cars' headlights. Boxes, one size [guess]. A car's own body takes neither its lights nor its shadow, which also fixes the taillight glow landing on the wrong part of the car (Ant). Lamp positions are still one fixed place per car.
+
+Menus: VIDEO > More Options (8 rows, and Lighting's button), its Lighting page (6 rows), AUDIO > More Options (3). 0x45ce10 names the button Escape and B press: only Backs now; More's being named made them loop (Ant).
+
 Particle flicker where cars' clouds overlap (Ant found it): overlap passed the march's budget, so every puff's steps changed frame to frame and the farthest were dropped. Budget 10 to 40, coarsening eases in, dropping only at 3 times over, ties in the sort broken by serial (vk.c). Not seen by me with cars overlapping: needs Ant's word.
 
 Countdown: laid out right of the middle by the game (centres 525 and 558 of 1024); centred in vk.c by its size and place. [verified: frames, 3, 2, 1, GO]

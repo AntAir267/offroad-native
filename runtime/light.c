@@ -324,7 +324,8 @@ int light_terrain_hook(CPU *c)
         strength = 0.0f;
     float L[MAX_CARS * 8];
     int n = 0;
-    if (strength > 0.0f)
+    float cast = strcasecmp(option_str("car_shadows", "on"), "on") ? 0.0f : 1.0f;
+    if (strength > 0.0f || cast > 0.0f)
         for (int k2 = 0; k2 < ncars && n < MAX_CARS; k2++, n++) {
             uint32_t mo = cars[k2] + 0x24;
             for (int q = 0; q < 3; q++) {
@@ -332,7 +333,7 @@ int light_terrain_hook(CPU *c)
                 L[n * 8 + 4 + q] = RF32(mo + 32 + 4 * (uint32_t)q);   /* the car's z: forwards */
             }
             L[n * 8 + 3] = strength;
-            L[n * 8 + 7] = 0.0f;
+            L[n * 8 + 7] = cast;
         }
     vk_light_cars(L, n);
     return 1;

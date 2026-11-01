@@ -3754,7 +3754,8 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
        usual. At 2560x1440 on the 890M that took a 5 ms frame to 24: Ant's puddle lag [verified: GPU time and coverage, frame by frame].
        The layers wash out long before that many: about 5 screens a batch (there are three) are drawn, every so many sheets. */
     static uint16_t thin_idx[65536];
-    if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && idx && ni >= 6 && ni <= 65000) {
+    if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && idx && ni >= 6 && ni <= 65000 &&
+        st->tex[0] && st->tex[0]->width == 64) {     /* (the spray's texture only: the terrain's blended passes came out checkered, Ant) */
         double sa = 0;
         for (int t = 0; t + 2 < ni; t += 3) {
             const SwVertex *A = &v[idx[t]], *B = &v[idx[t + 1]], *C = &v[idx[t + 2]];

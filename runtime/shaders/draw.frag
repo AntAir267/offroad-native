@@ -191,6 +191,28 @@ vec4 stage(uint c, uint a, vec4 dif, vec4 cur, vec4 tex, vec4 tf, vec4 spec)
    amb << 16, w grid | height << 16 (texture slots). Block: 0-2 the camera's inverse, 3 its offset, 4 ax bx ay by, 5 sun
    direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour, night's brightness; 9 1 / world size x, z, layers,
    cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye, how many cars; 12 on, each car two: pos, strength; forward; 36 the map's lamps' two images, how strong. */
+/* a car as a box: half width, height, length, in cm [guess: the rip's cars are about that; not each car's own] */
+const vec3 CAR_HALF = vec3(85.0, 60.0, 190.0);
+vec3 car_local(vec3 p, vec3 cf)
+{
+    vec3 fl = normalize(vec3(cf.x, 0.0, cf.z)), r = vec3(fl.z, 0.0, -fl.x);
+    return vec3(dot(p, r), p.y, dot(p, fl));
+}
+bool car_box_in(vec3 w, vec3 pos, vec3 cf)
+{
+    vec3 l = abs(car_local(w - pos, cf));
+    return l.x < CAR_HALF.x + 25.0 && l.y < CAR_HALF.y + 50.0 && l.z < CAR_HALF.z + 25.0;
+}
+/* how much a ray is blocked, 0..1, soft by how far through the box it passes */
+float car_box_hit(vec3 o, vec3 d, float tmax, vec3 pos, vec3 cf)
+{
+    vec3 lo = car_local(o - pos, cf), ld = car_local(d, cf);
+    ld += vec3(equal(ld, vec3(0.0))) * 1.0e-4;
+    vec3 t0 = (-CAR_HALF - lo) / ld, t1 = (CAR_HALF - lo) / ld;
+    vec3 a = min(t0, t1), b = max(t0, t1);
+    float in_ = max(max(a.x, a.y), max(a.z, 0.0)), out_ = min(min(b.x, b.y), min(b.z, tmax));
+    return smoothstep(0.0, 130.0, out_ - in_);
+}
 vec3 li_debug;
 vec3 li_add = vec3(0.0);
 vec3 clamp_light(vec3 c) { return c / max(1.0, max(c.r, max(c.g, c.b))); }
@@ -242,12 +264,22 @@ vec3 light_ratio()
        anything, sky and vis 1, this is exactly what the game drew) */
     vec3 now = amb * mix(1.0, sky, lb.v[b + 7u].w) + sunc * nl * vis + lb.v[b + 8u].rgb * bounce * 3.0;
     li_debug = pc.light.x == 3u ? vec3(fract(w.x / 5120.0), fract(w.z / 5120.0), clamp(abs(dy) / 500.0, 0.0, 1.0)) : vec3(vis, sky, nl);
-    /* car lights (block 12 on: pos, strength; forward): not under night's darkening; what they add goes on after */
+    /* the cars (block 12 on: pos, strength; forward, casting): their lights, not under night's darkening, what they add goes on
+       after; and shadows, a box for each car (they move, so are not in the bake) */
     vec3 add_l = vec3(0.0);
     int ncar = int(lb.v[b + 11u].w);
+    float car_sun = 1.0;
     for (int i = 0; i < ncar; i++) {
         vec4 cp = lb.v[b + 12u + uint(i) * 2u];
-        vec3 cf = lb.v[b + 13u + uint(i) * 2u].xyz;
+        vec4 cf4 = lb.v[b + 13u + uint(i) * 2u];
+        vec3 cf = cf4.xyz;
+        vec3 pos = cp.xyz + vec3(0.0, 65.0, 0.0);
+        /* a car's own body takes neither its lights nor its shadow */
+        bool own = car_box_in(w, pos, cf);
+        if (cf4.w > 0.5 && !own && length(w - pos) < 3000.0)
+            car_sun *= 1.0 - car_box_hit(w, lb.v[b + 5u].xyz, 3000.0, pos, cf);
+        if (cp.w <= 0.0 || own)
+            continue;
         /* the pair of headlamps as one beam from the front, a little up */
         vec3 hp = cp.xyz + cf * 170.0 + vec3(0.0, 70.0, 0.0);
         vec3 d = w - hp;
@@ -265,6 +297,11 @@ vec3 light_ratio()
                 cone *= 0.06;
         }
 #endif
+        /* and the other cars' */
+        if (cone * fall > 0.02)
+            for (int k = 0; k < ncar; k++)
+                if (k != i && lb.v[b + 13u + uint(k) * 2u].w > 0.5)
+                    cone *= 1.0 - car_box_hit(hp, dn, dl - 30.0, lb.v[b + 12u + uint(k) * 2u].xyz + vec3(0.0, 65.0, 0.0), lb.v[b + 13u + uint(k) * 2u].xyz);
         /* (the ground's facets would show at this low angle: nearly up) */
         float nh = max(dot(on_ground ? normalize(mix(fn, vec3(0.0, 1.0, 0.0), 0.9)) : fn, -dn), 0.0);
         add_l += vec3(1.0, 0.95, 0.82) * 1.1 * cp.w * cone * fall * (0.3 + 0.7 * nh);
@@ -275,6 +312,9 @@ vec3 light_ratio()
         float tl = sqrt(tdd);
         float back = smoothstep(-0.2, 0.5, dot(td / max(tl, 1.0), -cf));
         add_l += vec3(1.0, 0.08, 0.04) * 0.6 * cp.w * back / (1.0 + tdd / (220.0 * 220.0)) * (0.35 + 0.65 * max(dot(on_ground ? vec3(0.0, 1.0, 0.0) : fn, -td / max(tl, 1.0)), 0.0));
+    }
+    if (car_sun < 1.0) {
+        now = amb * mix(1.0, sky, lb.v[b + 7u].w) * mix(0.75, 1.0, car_sun) + sunc * nl * vis * car_sun + lb.v[b + 8u].rgb * bounce * 3.0;
     }
     /* the map's lamps, baked with their shadows (v[36]: ground map, grid, how strong) */
     vec4 lmp = lb.v[b + 36u];

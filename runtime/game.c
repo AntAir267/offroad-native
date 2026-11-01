@@ -18,12 +18,12 @@
    values, so a raised one comes back in. All of it must be raised together: the game clips every polygon at z 1 (renderer
    +0x400, 0x53fc20), and the fog runs to the far plane. A first go kept the depth mapping at the game's number to keep the sky
    behind things (the fault was the missing stencil, DESIGN.md) and raised only +0x250: nothing past the game's 260 m ever drew
-   (Ant: "still fogged", then with the fog moved, "low draw distance"). Only numbers the game's own range can give are raised. */
+   (Ant: "still fogged", then with the fog moved, "low draw distance"). Extreme is 2 times: at 2.5 the game's CPU went over a frame's time in puddles. Only numbers the game's own range can give are raised. */
 #define GAME_FAR_MAX 26000.0f
 static float far_scale(void)
 {
     const char *v = option_str("draw_distance", "far");
-    return !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.5f : 1.0f;
+    return !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.0f : 1.0f;
 }
 float game_far(float far)
 {
@@ -135,6 +135,14 @@ static int car_available_hook(CPU *c)
 /* (timing only) */
 static int puddle_hit_hook(CPU *c)
 {
+    /* One splash in three: the game makes one per wheel per tick, and with what the sheets cost it to clip and us to draw the
+       frame went over its time, with Extreme worst (game CPU 12 ms, 21 in the spray) [verified: frame-trace.txt, Ant's play] */
+    static unsigned every;
+    if (every++ % 3) {
+        puddle_recent = frame_count;
+        api_return(c, 0, 6);
+        return 1;
+    }
     double t = mono_ms();
     F_0049fe30_orig(c);
     if (frame_count > puddle_recent + 30)
