@@ -180,9 +180,9 @@ vec4 stage(uint c, uint a, vec4 dif, vec4 cur, vec4 tex, vec4 tf, vec4 spec)
 /* Baked lighting (runtime/light.c, tools/bake): how much of the vertex colour the game lit a pixel with is really there.
    The game's light is ambient + N.L sun, clamped by its largest channel [verified: 0x53fe80]; the bake says how much of the
    sky and sun this point sees and how much bounces to it. A pixel on the terrain's own triangles reads the fine maps,
-   anything above it the grid draped over the terrain. pc.light: x 1 (2 shows the ratio alone), y the view's block, z sun |
+   anything above it the grid draped over the terrain. pc.light: x 1 (5 a flat draw, only night's brightness; 2 shows the ratio alone), y the view's block, z sun |
    amb << 16, w grid | height << 16 (texture slots). Block: 0-2 the camera's inverse, 3 its offset, 4 ax bx ay by, 5 sun
-   direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour; 9 1 / world size x, z, layers,
+   direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour, night's brightness; 9 1 / world size x, z, layers,
    cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye. */
 vec3 li_debug;
 vec3 clamp_light(vec3 c) { return c / max(1.0, max(c.r, max(c.g, c.b))); }
@@ -501,9 +501,13 @@ void main()
     vec4 dif = flat_shade ? f_diffuse : v_diffuse;
     vec4 spec = flat_shade ? vec4(f_specular.rgb, v_specular.a) : v_specular;
     vec4 tf = argb(pc.misc.z);
-    if (pc.light.x != 0u) {
+    if (pc.light.x == 5u) {
+        dif.rgb *= lb.v[pc.light.y + 8u].w;
+        spec.rgb *= lb.v[pc.light.y + 8u].w;
+    } else if (pc.light.x != 0u) {
         vec3 lr = light_ratio();
-        dif.rgb *= lr;
+        dif.rgb *= lr * lb.v[pc.light.y + 8u].w;
+        spec.rgb *= lb.v[pc.light.y + 8u].w;
         if (pc.light.x >= 2u) {        /* ORR_LIGHT_DEBUG: 2 the ratio alone, 3 where it thinks it is, 4 sun, sky, N.L */
             o_color = vec4(pc.light.x == 2u ? lr * 0.5 : li_debug, 1.0);
             return;

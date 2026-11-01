@@ -38,13 +38,15 @@ float game_far(float far)
    goes to the volumetric renderer (vk.c, from 1nsane-native) in view space and the sprite is not drawn. That
    renderer reads a Direct3D view and projection, which this game does not use, so it gets a copy of the
    device's state with them made up from the camera (+0x178, +0x188: z = a + b / w; focal length 640). */
-static int dust_on;
+static int dust_on, streamer_on;
 
 void game_options(void)
 {
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
-    extern void light_options(void);
+    streamer_on = !strcasecmp(option_str("streamer_mode", "off"), "on");
+    extern void light_options(void), mix_options(void);
     light_options();
+    mix_options();
 }
 
 /* One tick a frame. The game steps at 60 a second however fast it draws: 0x4db240 reads the time since the last frame
@@ -55,6 +57,7 @@ void game_options(void)
    So a frame waits here for a whole tick since the last. (The timer's own wait, its second argument, spins on Sleep(0) and
    counts from when it last finished: on a beat of its own it spun a little longer every frame, 14 ms a frame by a lap's end.)
    Not in test runs (their clock is a count of frames); the ticks a second are what they were, only the frames with none go. */
+static unsigned long puddle_recent;
 static double mono_ms(void)
 {
     struct timespec t;
@@ -71,6 +74,12 @@ static int frame_timer_hook(CPU *c)
         return 0;
     static double last;
     double due = last + 1000.0 / 60.0, now = mono_ms();
+    /* a slow frame, always in the log: what Ant's play shows that scripted runs do not */
+    if (last > 0 && now - last > 25.0 && frame_count > 600) {
+        static int said;
+        if (said++ < 400)
+            LOG(LOG_ALWAYS, "slow frame %lu: %.1f ms%s", frame_count, now - last, puddle_recent + 30 > frame_count ? " (puddle)" : "");
+    }
     if (now < due - 1.0) {
         struct timespec ts = {0, (long)((due - 1.0 - now) * 1e6)};
         nanosleep(&ts, NULL);
@@ -78,6 +87,94 @@ static int frame_timer_hook(CPU *c)
     while (mono_ms() < due)
         __builtin_ia32_pause();
     last = mono_ms();
+    return 0;
+}
+
+/* ORR_RACE_LOOK=<time>[_<weather>] (tools/dev/race.sh): the race's time of day and weather whatever the menus chose,
+   day, sunset or night, rain or snow: +0, +4 of the settings [verified: 0x4d9c30] */
+static int level_load_hook(CPU *c)
+{
+    const char *l = getenv("ORR_RACE_LOOK");
+    if (l) {
+        uint32_t st = R32(c->esp + 4);
+        W32(st, strstr(l, "snow") ? 1u : strstr(l, "rain") ? 3u : 0u);
+        W32(st + 4, strstr(l, "sunset") ? 2u : strstr(l, "night") ? 3u : 1u);
+    }
+    return 0;
+}
+
+/* The terrain's polygon records, 16 bytes each, are in the object itself: +0x54 up to +0x40054, which is the cursor, and
+   nothing checks (0x53f680 only adds, 0x54c0c0 resets to +0x54; readers follow pointers stored per polygon [verified:
+   decompile]). 16384 polygons were never reached at 260 m. At Extreme they run over the object's other fields: Ant's crash in
+   0x540260 on a pointer from a list [verified: last-run.log]. So the cursor starts in a larger block of our own. */
+static int terrain_begin_hook(CPU *c)
+{
+    static uint32_t pool;
+    static int plog = -1;
+    enum { POOL = 16 << 20 };
+    uint32_t t = c->ecx;
+    if (plog < 0)
+        plog = getenv("ORR_POOL_LOG") != NULL;
+    if (plog && pool && frame_count % 200 == 0)
+        LOG(LOG_ALWAYS, "terrain: frame %lu polygons %u vertices %d %d", frame_count, (R32(t + 0x40054) - pool) / 16, (int)(int16_t)R16(t + 0x50), (int)(int16_t)R16(t + 0x52));
+    if (!pool)
+        pool = galloc(POOL);
+    F_0054c0c0_orig(c);
+    W32(t + 0x40054, pool);
+    return 1;
+}
+
+static int car_available_hook(CPU *c)
+{
+    if (!getenv("ORR_UNLOCK_ALL"))
+        return 0;
+    api_return(c, 1, 0);
+    return 1;
+}
+
+/* (timing only) */
+static int puddle_hit_hook(CPU *c)
+{
+    double t = mono_ms();
+    F_0049fe30_orig(c);
+    if (frame_count > puddle_recent + 30)
+        LOG(LOG_ALWAYS, "puddle hit at frame %lu: %.2f ms to make the splash", frame_count, mono_ms() - t);
+    puddle_recent = frame_count;
+    return 1;
+}
+
+/* Streamer mode: the paint jobs with the Confederate flag load the car's plain paint instead, for everyone in the race and
+   in the menus' previews. bugNN is the car, pjK the paint, d and m its dirty and muddy versions [verified: the rip's cars.json,
+   each of these looked at]: Blackfoot 3, 4; Comanche 3, 4; Bronco 3; Polecat 3; Firesole 5. */
+static int texture_name_hook(CPU *c)
+{
+    if (!streamer_on)
+        return 0;
+    static const char *const flagged[] = {"bug15", "3", "bug15", "4", "bug05", "3", "bug05", "4", "bug14", "3", "bug20", "3", "bug17", "5"};
+    uint32_t a = R32(c->esp + 4);
+    const char *n = a ? gstr(a) : NULL;
+    if (!n)
+        return 0;
+    const char *base = n;
+    for (const char *p = n; *p; p++)
+        if (*p == '\\' || *p == '/')
+            base = p + 1;
+    const char *pj = strcasestr(base, "pj");
+    if (!pj || !pj[2] || strncasecmp(base, "bug", 3))
+        return 0;
+    for (unsigned i = 0; i + 1 < sizeof flagged / sizeof *flagged; i += 2)
+        if (!strncasecmp(base, flagged[i], 5) && pj[2] == flagged[i + 1][0]) {
+            char o[256];
+            size_t head = (size_t)(pj - n);
+            snprintf(o, sizeof o, "%.*s%s", (int)head, n, pj + 3);
+            static uint32_t buf;
+            if (!buf)
+                buf = galloc(256);
+            gstrncpy(buf, o, 256);
+            W32(c->esp + 4, buf);
+            LOG(LOG_ALWAYS, "streamer mode: %s for %s", o, n);
+            return 0;
+        }
     return 0;
 }
 
@@ -168,14 +265,14 @@ static int puff_draw_hook(CPU *c)
         /* A wheel's puff is born whole, at its first size and strength, and removed while it still has some (0x419070: when
            +0x70 falls under +0x78). As a sprite that hardly showed; as a volume, at speed, with the car leaving each one
            behind in a few frames, lumps came and went about 15 times a second: Ant's smoke flicker [verified: ORR_SMOKE_DEBUG=1
-           dumps, consecutive frames]. So it grows into its strength (its age from its size: 64 at birth, +0x68 a tick) and
-           is gone by the time the game removes it. */
+           dumps, consecutive frames]. So it grows into its strength in a few ticks (its age from its size: 64 at birth, +0x68 a
+           tick) and is gone by the time the game removes it. A slower ramp, 10 ticks, cost the dirt most of its look (Ant). */
         float rate = RF32(o + 0x68), left = RF32(o + 0x70) - RF32(o + 0x78);
-        float in = rate > 0.01f ? (hw - 64.0f) / rate / 10.0f : 1.0f;
-        float out = left / 0.25f;
+        float in = rate > 0.01f ? (hw - 64.0f) / rate / 4.0f : 1.0f;
+        float out = left / 0.12f;
         in = in < 0.0f ? 0.0f : in > 1.0f ? 1.0f : in;
         out = out < 0.0f ? 0.0f : out > 1.0f ? 1.0f : out;
-        diffuse = (uint32_t)((float)(diffuse >> 24) * in * in * out) << 24 | (diffuse & 0xffffffu);
+        diffuse = (uint32_t)((float)(diffuse >> 24) * in * out) << 24 | (diffuse & 0xffffffu);
     }
     /* (grow 1: the renderer's size history is by serial, and the game reuses objects' addresses: 0 showed a new puff
        at the size of the one before, a full-screen haze for a frame [verified: frames 4008-4010]) */
@@ -195,6 +292,11 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    hook_car_available = car_available_hook;
+    hook_texture_name = texture_name_hook;
+    hook_puddle_hit = puddle_hit_hook;
+    hook_terrain_begin = terrain_begin_hook;
+    hook_level_load = level_load_hook;
     extern int light_terrain_hook(CPU *c);
     hook_terrain_light = light_terrain_hook;
     game_options();

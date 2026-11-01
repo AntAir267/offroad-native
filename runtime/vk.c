@@ -3815,7 +3815,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             }
         }
         int hud = flat && w0 < 1.5f && z0 < 0.02f;
-        li_lit = !flat && li_view.on;
+        li_lit = !flat && li_view.on ? 1 : flat && !hud && li_view.on && li_view.bounce[3] < 1.0f ? 2 : 0;
         if (ssao_on && hud && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
             ssao_done = 1;
             ssao_passes(c, z);
@@ -3937,7 +3937,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     float mnz = st->vp.minz, dz = st->vp.maxz - st->vp.minz;
     const float pl0[6] = {ax, bx, ay, by, mnz, dz};     /* (without the scene's jitter: its motion vectors) */
     /* what is lit by adding to or multiplying what is there keeps its colour */
-    if (li_lit && (!r[RS_ALPHABLENDENABLE] || (r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6)) && li_sun) {
+    if (li_lit && (li_lit == 2 || !r[RS_ALPHABLENDENABLE] || (r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6)) && li_sun) {
         if (li_view.block < 0 && li_blocks < LIGHT_VIEWS) {
             li_view.block = (int)((uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)(fi * LIGHT_VIEWS + li_blocks++) * LIGHT_BLOCK);
             float *B = (float *)sm_buf.map + (size_t)li_view.block * 4;
@@ -3955,7 +3955,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             memcpy(B + 44, li_view.eye, 16);
         }
         if (li_view.block >= 0) {
-            pc.inst[0] = li_view.mode;
+            pc.inst[0] = li_lit == 2 ? 5u : li_view.mode;   /* (a flat draw at night, the sky: only darker) */
             pc.inst[1] = (uint32_t)li_view.block;
             pc.inst[2] = (uint32_t)li_sun->slot | (uint32_t)li_amb->slot << 16;
             pc.inst[3] = (uint32_t)li_grid->slot | (uint32_t)li_height->slot << 16;

@@ -145,6 +145,22 @@ Audio (Ant: music far louder than the car). Not a stack problem: one bug. The ga
 
 Ray-traced lighting: see 7d.
 
+Crash at Extreme (Ant): the terrain's polygon records live in the object, 16 bytes each, 16384 of them, unchecked; past that they overwrite its other fields (0x540260 on a bad pointer, last-run.log). game.c terrain_begin_hook starts the cursor in a 16 MB block of our own. Measured at Extreme, day, track 1 (ORR_POOL_LOG, sampled): up to 23123 polygons on Dead Man's Drop, 18464 on Campy, 3-6000 vertices against a limit of 32767.
+
+Dirt, after Ant: "the tire dirt you had previously was better": ramp 10 ticks to 4, fade-out shorter (game.c). Not compared side by side; his eyes.
+
+Puddle lag: still not reproduced, now with a hit logged: off-screen at 2560x1440 real time, game CPU goes from 4 to 8 ms for a second after a splash, no frame over 20 ms, splash made in 0.01 ms. Real-window runs do not work from here (no swapchain in this shell). So real play now records itself: every frame in ~/.local/share/offroad-native/frame-trace.txt, "slow frame ... (puddle)" lines and surface-write waits in last-run.log. Ant's last real run shows 1019 waits of 4.7 ms for the render thread that off-screen runs do not have (9): the next suspect. Read those files after he plays.
+
+Debug launcher: tools/dev/race.sh, any location, track, car, paint, time and weather through the Time Trial menus, all cars unlocked (ORR_UNLOCK_ALL hooks 0x4784f0, ORR_RACE_LOOK writes 0x5cea00 at 0x4da920). The header lists the numbers. Keys at 50-frame spacing: 30 dropped some.
+
+Streamer mode (VIDEO > More Options, game.c texture_name_hook): the seven flagged paints load the car's plain paint, also dirty and muddy, for AI cars and previews too. List from the 3D Car Garage chat, each texture looked at: Blackfoot 3, 4 (bug15); Comanche 3, 4 (bug05); Bronco 3 (bug14); Polecat 3 (bug20); Firesole 5 (bug17). The menu still offers those numbers, showing plain.
+
+Night (More Options, Original, Dark, Darkest): no re-bake. draw.frag scales lit colour and specular (the fog) by 1, 0.55, 0.3 at night, flat non-HUD draws (sky) too; lamps, being additive, stay. Needs the baked lighting on.
+
+Audio: AUDIO > More Options (Music, Engines, Effects, 0-15; 10 as made, music starts at 7), mss32.c mix_options; engines by file name: r1k, r2k, r4k, neutral, gear, rev [guess]. The game's own AUDIO > Advanced has a Music Volume too: at the default 16 it clamps at full (slider x base / 12).
+
+Menu table: only 11 widget ids were free. table_new_hook gives the game's table a larger block and new widgets take ids from 0x191 (0x190 is its count).
+
 T7, with these: fncheck baseline unchanged, lockstep identical over 3,600 frames, a real-time race of 5,200 frames on the RTX 4070 with validation on: no messages.
 
 T7, with the fixes above: fncheck and lockstep unchanged; a race with stencil, Extreme, AO and dust on the RTX 4070, 5200 frames: no validation messages.

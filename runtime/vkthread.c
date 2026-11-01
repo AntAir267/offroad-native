@@ -502,10 +502,12 @@ static int going(void)
         return 0;
     head = tail = block_new(BLOCK);
     const char *tp = getenv("ORR_FRAME_TRACE");
-    if (tp && *tp) {
+    if (tp && *tp)
         snprintf(trace_path, sizeof trace_path, "%s", tp);
+    else if (getenv("HOME"))        /* (always, for now: what Ant's play shows and scripted runs do not; frames only, under 10 MB) */
+        snprintf(trace_path, sizeof trace_path, "%s/.local/share/offroad-native/frame-trace.txt", getenv("HOME"));
+    if (trace_path[0])
         trace = calloc(TRACE_MAX, sizeof *trace);
-    }
     pthread_attr_t at;
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 8 << 20);
@@ -1090,7 +1092,8 @@ void vk_cpu_access(Surface *s, int write)
         sync_why = SYNC_CPU;
         double t0 = trace ? now_real_ms() : 0;
         vk_sync();
-        if (trace)
+        static int said;
+        if (trace && said++ < 300)
             LOG(LOG_ALWAYS, "frame trace: frame %lu: CPU %s of a %ux%u %u-bit surface (caps %x) waited %.2f ms",
                 atomic_load(&frames_sent), write ? "write" : "read", s->width, s->height, s->bpp * 8, s->caps,
                 now_real_ms() - t0);

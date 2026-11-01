@@ -68,6 +68,19 @@ HOOKS = {
     0x53c260: 'puff_draw',
     # game.c: the main loop's frame timer (ECX the timer; the time out, whether to wait for a whole tick)
     0x56b180: 'frame_timer',
+    # game.c: whether a car can be chosen (ECX the car, EDX its player's unlocks): ORR_UNLOCK_ALL for race.sh
+    0x4784f0: 'car_available',
+    # menu.c: AUDIO's screen handler (ECX the widget, EDX the message); the widget table's constructor (ECX its block)
+    0x43da20: 'audio_screen',
+    0x4701f0: 'table_new',
+    # game.c: a texture asked for by name (ECX the manager, first argument the name): streamer mode
+    0x513c80: 'texture_name',
+    # game.c: a car hitting a puddle (the splash made)
+    0x49fe30: 'puddle_hit',
+    # game.c: the terrain starting a view (ECX the terrain): its polygon records, +0x54 for 0x40000 bytes
+    0x54c0c0: 'terrain_begin',
+    # game.c: a race's level being loaded (ECX the race, first argument its settings, 0x5cea00: +0 weather, +4 time of day)
+    0x4da920: 'level_load',
     # light.c: a view of the race starting to draw (0x4daec0 calls it first; ECX the camera)
     0x4f0770: 'terrain_light',
     0x4a54b0: 'cameras_file',

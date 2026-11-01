@@ -164,6 +164,10 @@ static void load(void)
                     m.amb_col[i] = ac[i];
                     m.bounce_col[i] = sc[i] * tint[i];
                 }
+                /* a darker night, at no cost: the bake's light all scaled, the fog and sky with it (draw.frag) */
+                const char *nv = option_str("night", "original");
+                m.bounce_col[3] = !strcmp(want_look, "night") || !strncmp(want_look, "night_", 6)
+                                      ? (!strcasecmp(nv, "darkest") ? 0.3f : !strcasecmp(nv, "dark") ? 0.55f : 1.0f) : 1.0f;
                 m.sun_dir[3] = fh[3];
                 memcpy(light_dir, sd, sizeof light_dir);
                 /* how much of the game's flat ambient really comes from the sky (the rest always arrives) */
@@ -185,7 +189,7 @@ static void load(void)
 }
 
 static int on = -1;
-void light_options(void) { on = -1; }
+void light_options(void) { on = -1; want_changed = 1; }
 
 int light_terrain_hook(CPU *c)
 {

@@ -14,7 +14,10 @@
    The new widgets are made by the game's own functions in the ids above its own, so they have its arrows, sounds,
    help line and controller support. VIDEO's new button takes the room under Brightness, whose y (in data,
    0x5b95c8) moves up 14 to fit above Back. */
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "runtime.h"
 #include "options.h"
 #include "widescreen.h"
@@ -25,6 +28,12 @@
 #define PAGE 0x15fu
 #define PAGE_BACK 0x159u
 #define ROW_FIRST 0x161u               /* up to 0x168 */
+/* more ids than the game has room for: table_new_hook makes its table larger; 0x190 itself is its count */
+#define ROW_MORE 0x191u
+#define AUDIO_PAGE 0x1a0u
+#define AUDIO_MORE 0x1a1u
+#define AUDIO_BACK 0x1a2u
+#define AUDIO 0x120u
 #define VIDEO 0x12fu
 #define PARENT 0x118u
 
@@ -34,6 +43,7 @@ typedef struct {
     const char *text[4], *value[4];
     uint32_t items, cell;
     int shown;
+    int audio;                         /* 1: on AUDIO's page; n is then how many steps, the value 0..n-1 */
 } Row;
 
 static Row rows[] = {
@@ -45,10 +55,27 @@ static Row rows[] = {
     {"ambient_occlusion", "on", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"volumetric_dust", "on", "Volumetric Dust", "Real Clouds Of Dust And Exhaust Smoke", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"baked_lighting", "on", "Ray-Traced Lighting", "Real Shadows And Shade", 2, {"Original", "Baked"}, {"off", "on"}, 0, 0, 0},
+    {"night", "original", "Night", "How Dark Night Races Are - With Ray-Traced Lighting", 3, {"Original", "Dark", "Darkest"}, {"original", "dark", "darkest"}, 0, 0, 0},
+    {"streamer_mode", "off", "Streamer Mode", "Hides The Confederate Flag Paint Jobs - From The Next Load", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
+    {"music_level", "7", "Music", "Music Against Everything Else", 16, {0}, {0}, 0, 0, 0, 1},
+    {"engine_level", "10", "Engines", "Every Car's Engine, Yours And The Others", 16, {0}, {0}, 0, 0, 0, 1},
+    {"effects_level", "10", "Effects", "Crashes, Skids, Crowds, Announcer And Menus", 16, {0}, {0}, 0, 0, 0, 1},
 };
 #define NROWS ((int)(sizeof rows / sizeof *rows))
 
-static float fl_y(int i) { return 90.0f + 40.0f * (float)i; }
+static uint32_t row_id(int i) { return i < 8 ? ROW_FIRST + (uint32_t)i : ROW_MORE + (uint32_t)(i - 8); }
+static int row_of(uint32_t id) { return id >= ROW_MORE ? (int)(id - ROW_MORE) + 8 : (int)id - (int)ROW_FIRST; }
+/* (its place among its page's rows, ten on the page: closer) */
+static float fl_y(int i)
+{
+    int place = 0, total = 0;
+    for (int k = 0; k < NROWS; k++)
+        if (rows[k].audio == rows[i].audio) {
+            place += k < i;
+            total++;
+        }
+    return 90.0f + (total > 8 ? 32.0f : 40.0f) * (float)place;
+}
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 static uint32_t fast(CPU *c, uint32_t fn, uint32_t a, uint32_t b)
@@ -62,12 +89,12 @@ static uint32_t fast(CPU *c, uint32_t fn, uint32_t a, uint32_t b)
     return r;
 }
 
-static uint32_t help_more, help_back, text_more, text_title, text_back;
+static uint32_t help_more, help_back, help_more_audio, help_back_audio, text_more, text_title, text_back;
 
 METHOD(row_handler, 0)
 {
     uint32_t e = c->ecx, d = c->edx, id = R32(c->ecx + 0x28);
-    int i = (int)id - (int)ROW_FIRST;
+    int i = row_of(id);
     if (i < 0 || i >= NROWS)
         return 1;
     Row *r = &rows[i];
@@ -98,16 +125,18 @@ METHOD(row_handler, 0)
     return 1;
 }
 
-/* More Options and the page's Back: a button that leaves one screen for another */
+/* More Options and the pages' Backs: a button that leaves one screen for another */
 METHOD(button_handler, 0)
 {
     uint32_t e = c->ecx, d = c->edx, id = R32(c->ecx + 0x28);
-    int more = id == BUTTON_MORE;
+    int more = id == BUTTON_MORE || id == AUDIO_MORE;
+    int audio = id == AUDIO_MORE || id == AUDIO_BACK;
+    uint32_t screen = audio ? AUDIO : VIDEO, page = audio ? AUDIO_PAGE : PAGE;
     switch (R32(c->edx)) {
     case 0:
         c->ecx = id;
         c->edx = more ? text_more : text_back;
-        guest_call(c, 0x457740, 7, fu(210.0f), fu(more ? 375.0f : R32(0x57c1ec) ? RF32(0x57c1ec) : 420.0f), 0u, 0u,
+        guest_call(c, 0x457740, 7, fu(210.0f), fu(id == AUDIO_MORE ? 300.0f : more ? 375.0f : R32(0x57c1ec) ? RF32(0x57c1ec) : 420.0f), 0u, 0u,
                    R32(0x57c1e4), R32(0x57c1e8), 0u);
         c->ecx = e;
         c->edx = d;
@@ -115,11 +144,11 @@ METHOD(button_handler, 0)
         break;
     case 3:
         fast(c, 0x458cd0, 0x4b, 0);
-        fast(c, 0x458cb0, more ? VIDEO : PAGE, 0);
-        fast(c, 0x458730, PARENT, more ? PAGE : VIDEO);
+        fast(c, 0x458cb0, more ? screen : page, 0);
+        fast(c, 0x458730, PARENT, more ? page : screen);
         break;
     case 4:
-        fast(c, 0x458d00, more ? help_more : help_back, 0);
+        fast(c, 0x458d00, more ? (audio ? help_more_audio : help_more) : (audio ? help_back_audio : help_back), 0);
         fast(c, 0x457fd0, id, 0);
         break;
     case 5: fast(c, 0x4582c0, id, 0); break;
@@ -140,7 +169,23 @@ METHOD(page_shown, 0)
 {
     fast(c, 0x4585d0, PAGE_BACK, 0);
     for (int i = 0; i < NROWS; i++)
-        fast(c, 0x4585d0, ROW_FIRST + (uint32_t)i, 0);
+        if (!rows[i].audio)
+            fast(c, 0x4585d0, row_id(i), 0);
+    return 1;
+}
+
+METHOD(audio_page_shown, 0)
+{
+    fast(c, 0x4585d0, AUDIO_BACK, 0);
+    for (int i = 0; i < NROWS; i++)
+        if (rows[i].audio)
+            fast(c, 0x4585d0, row_id(i), 0);
+    return 1;
+}
+
+METHOD(audio_shown, 0)
+{
+    fast(c, 0x4585d0, AUDIO_MORE, 0);
     return 1;
 }
 
@@ -156,21 +201,34 @@ static void when_shown(CPU *c, uint32_t fn)
     guest_call(c, 0x478130, 1, fn);
 }
 
+static void page_made(CPU *c, uint32_t page, uint32_t back, int audio, uint32_t title, uint32_t shown)
+{
+    fast(c, 0x458c60, 0x119, title);
+    fast(c, 0x458730, page, back);
+    for (int i = 0; i < NROWS; i++)
+        if (rows[i].audio == audio)
+            fast(c, 0x458730, page, row_id(i));
+    for (int i = 0; i < NROWS; i++)
+        if (rows[i].audio == audio)
+            fast(c, 0x4588d0, row_id(i), 0);
+    fast(c, 0x4588d0, back, 0);
+    fast(c, 0x458810, back, 0);
+    uint32_t e = c->ecx;
+    when_shown(c, shown);
+    c->ecx = e;
+}
+
 METHOD(page_handler, 0)
 {
-    if (R32(c->edx) == 0) {
-        fast(c, 0x458c60, 0x119, text_title);
-        fast(c, 0x458730, PAGE, PAGE_BACK);
-        for (int i = 0; i < NROWS; i++)
-            fast(c, 0x458730, PAGE, ROW_FIRST + (uint32_t)i);
-        for (int i = 0; i < NROWS; i++)
-            fast(c, 0x4588d0, ROW_FIRST + (uint32_t)i, 0);
-        fast(c, 0x4588d0, PAGE_BACK, 0);
-        fast(c, 0x458810, PAGE_BACK, 0);
-        uint32_t e = c->ecx;
-        when_shown(c, thunk_addr(page_shown, "more options shown"));
-        c->ecx = e;
-    }
+    if (R32(c->edx) == 0)
+        page_made(c, PAGE, PAGE_BACK, 0, text_title, thunk_addr(page_shown, "more options shown"));
+    return 1;
+}
+
+METHOD(audio_page_handler, 0)
+{
+    if (R32(c->edx) == 0)
+        page_made(c, AUDIO_PAGE, AUDIO_BACK, 1, text_title, thunk_addr(audio_page_shown, "audio options shown"));
     return 1;
 }
 
@@ -208,17 +266,21 @@ static int video_rows_hook(CPU *c)
     text_back = gstrdup("Back");
     help_more = gstrdup("Widescreen, Anti-Aliasing And More");
     help_back = gstrdup("Return To The Video Options");
+    help_more_audio = gstrdup("Music, Engines And Effects");
+    help_back_audio = gstrdup("Return To The Audio Options");
     for (int i = 0; i < NROWS; i++) {
         Row *r = &rows[i];
         r->items = galloc((uint32_t)r->n * 8);
         for (int k = 0; k < r->n; k++) {
-            W32(r->items + 8 * (uint32_t)k, gstrdup(r->text[k]));
+            char num[8];
+            snprintf(num, sizeof num, "%d", k);
+            W32(r->items + 8 * (uint32_t)k, gstrdup(r->audio ? num : r->text[k]));
             W32(r->items + 8 * (uint32_t)k + 4, (uint32_t)k);
         }
         r->cell = galloc(4);
-        r->shown = row_value(r);
+        r->shown = r->audio ? atoi(option_str(r->key, r->default_value)) : row_value(r);
         W32(r->cell, (uint32_t)r->shown);
-        new_widget(c, table, ROW_FIRST + (uint32_t)i, thunk_addr(row_handler, "more options row"));
+        new_widget(c, table, row_id(i), thunk_addr(row_handler, "more options row"));
     }
     uint32_t button = thunk_addr(button_handler, "more options button");
     new_widget(c, table, BUTTON_MORE, button);
@@ -228,6 +290,14 @@ static int video_rows_hook(CPU *c)
     uint32_t page = guest_call(c, 0x46a4d0, 7, 0u, 0u, 0u, 0u, thunk_addr(page_handler, "more options page"), icon, 0u);
     c->ecx = table;
     guest_call(c, 0x470240, 2, page, PAGE);
+    new_widget(c, table, AUDIO_MORE, button);
+    new_widget(c, table, AUDIO_BACK, button);
+    icon = new_icon(c, AUDIO_PAGE);
+    mem = guest_call(c, G_NEW, 1, 0xa4u);
+    c->ecx = mem;
+    page = guest_call(c, 0x46a4d0, 7, 0u, 0u, 0u, 0u, thunk_addr(audio_page_handler, "audio options page"), icon, 0u);
+    c->ecx = table;
+    guest_call(c, 0x470240, 2, page, AUDIO_PAGE);
     c->ecx = table;
     W32(0x5b95c8, fu(331.0f));
     return 1;
@@ -247,6 +317,33 @@ static int video_screen_hook(CPU *c)
     return 1;
 }
 
+static int audio_screen_hook(CPU *c)
+{
+    int made = R32(c->edx) == 0;
+    F_0043da20_orig(c);
+    if (made) {
+        fast(c, 0x458730, AUDIO, AUDIO_MORE);
+        fast(c, 0x4588d0, AUDIO_MORE, 0);
+        uint32_t e = c->ecx;
+        when_shown(c, thunk_addr(audio_shown, "audio shown"));
+        c->ecx = e;
+    }
+    return 1;
+}
+
+/* The game's table of widgets has 0x190 ids and a count after them, and no free ids left for more than 11 widgets. Anything else
+   finds a widget through the table's address and its id, unchecked [verified: 0x470240 and its readers], so a larger block
+   does: the constructor is given one. */
+static int table_new_hook(CPU *c)
+{
+    uint32_t mem = guest_call(c, G_NEW, 1, 0x1000u);
+    memset(gptr(mem), 0, 0x1000);
+    c->ecx = mem;
+    F_004701f0_orig(c);
+    c->eax = mem;
+    return 1;
+}
+
 /* once a frame: a row's value changed: it applies at once and is kept */
 void menu_frame(void)
 {
@@ -256,8 +353,10 @@ void menu_frame(void)
         if (!r->cell || (int)R32(r->cell) == r->shown)
             continue;
         r->shown = (int)R32(r->cell);
+        char num[8];
+        snprintf(num, sizeof num, "%d", r->shown);
         if (r->shown >= 0 && r->shown < r->n)
-            option_set(r->key, r->value[r->shown]);
+            option_set(r->key, r->audio ? num : r->value[r->shown]);
         changed = 1;
     }
     if (changed) {
@@ -273,4 +372,6 @@ void menu_init(void)
         return;
     hook_video_rows = video_rows_hook;
     hook_video_screen = video_screen_hook;
+    hook_audio_screen = audio_screen_hook;
+    hook_table_new = table_new_hook;
 }

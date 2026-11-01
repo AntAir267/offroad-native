@@ -27,6 +27,7 @@
 #include <libavutil/channel_layout.h>
 #include "runtime.h"
 #include "sound.h"
+#include "options.h"
 
 #define LOGS(...) LOG(LOG_SOUND, __VA_ARGS__)
 
@@ -42,6 +43,7 @@ typedef struct Obj {
     uint32_t handle;                    /* the program's handle */
     int voice;                          /* runtime voice, -1 none */
     int ended;                          /* played to its end: the position stays at the end */
+    int engine;                         /* its sample is an engine's (mix levels) */
     int16_t *decoded;                   /* ADPCM decoded for the voice (owned) */
     uint32_t dec_frames;
     int status;
@@ -247,6 +249,46 @@ static void place_3d(const Obj *o, float *g, float *bal)
     }
 }
 
+static float mix_music = 0.7f, mix_engine = 1.0f, mix_effects = 1.0f;
+static void apply_gain(Obj *o);
+
+/* Which samples are engines: by file. r1k, r2k, r4k, neutral, gear, rev [guess: names; not told apart by the code] */
+static uint32_t eng_addr[256], eng_end[256];
+static int eng_n;
+static void note_sample(const char *win, uint32_t addr, uint32_t n)
+{
+    const char *b = win;
+    for (const char *p = win; *p; p++)
+        if (*p == '\\' || *p == '/')
+            b = p + 1;
+    static int last_engine;              /* (a converted copy comes back under a temporary name) */
+    int named = strncasecmp(b, "wav", 3) != 0 && strstr(win, "Audio") != NULL;
+    int e = named ? (!strncasecmp(b, "r1k", 3) || !strncasecmp(b, "r2k", 3) || !strncasecmp(b, "r4k", 3) || !strncasecmp(b, "neutral", 7) ||
+                     !strncasecmp(b, "gear", 4) || !strncasecmp(b, "rev", 3)) : last_engine;
+    last_engine = e;
+    if (e && eng_n < 256) {
+        eng_addr[eng_n] = addr;
+        eng_end[eng_n++] = addr + n;
+    }
+}
+static int is_engine(uint32_t addr)
+{
+    for (int i = 0; i < eng_n; i++)
+        if (addr >= eng_addr[i] && addr < eng_end[i])
+            return 1;
+    return 0;
+}
+
+void mix_options(void)
+{
+    mix_music = (float)atoi(option_str("music_level", "7")) / 10.0f;
+    mix_engine = (float)atoi(option_str("engine_level", "10")) / 10.0f;
+    mix_effects = (float)atoi(option_str("effects_level", "10")) / 10.0f;
+    for (int i = 0; i < MAXOBJ; i++)
+        if (objs[i].used && objs[i].voice >= 0)
+            apply_gain(&objs[i]);
+}
+
 static void apply_gain(Obj *o)
 {
     if (o->voice < 0)
@@ -264,10 +306,8 @@ static void apply_gain(Obj *o)
            0.55 x 0.55 against music at 0.55 at the game's settings (Ant: "music is far louder than vehicle audio") */
         v *= master;
     }
-    /* the tracks are mastered far hotter than the engine samples: with the above the race is about music 5100, effects
-       4000 (RMS of the mix, full throttle). 3 dB off puts the car on top; the game's music slider still works under it */
-    if (o->kind == K_STREAM)
-        v *= 0.7f;
+    /* AUDIO > More Options (menu.c), on top of the game's Master Volume */
+    v *= o->kind == K_STREAM ? mix_music : o->engine ? mix_engine : mix_effects;
     /* equal-power pan, unity in the centre */
     float l = p > 0 ? 1.0f - p : 1.0f, r = p < 0 ? 1.0f + p : 1.0f;
     voice_set_gain(o->voice, v * l, v * r);
@@ -738,6 +778,7 @@ AIL(file_read, 8)
     size_t got = fread(gptr(data), 1, (size_t)n, f);
     fclose(f);
     LOGS("AIL_file_read(%s): %ld bytes at %08x", win, n, dst);
+    note_sample(win, data, (uint32_t)n);
     (void)got;
     return dst;
 }
@@ -818,6 +859,7 @@ static int set_file(Obj *o, uint32_t img)
         return 0;
     }
     o->addr = data;
+    o->engine = is_engine(data);
     o->len = len;
     o->rate = rate;
     o->block = align;
