@@ -68,6 +68,8 @@ HOOKS = {
     0x53c260: 'puff_draw',
     # game.c: the main loop's frame timer (ECX the timer; the time out, whether to wait for a whole tick)
     0x56b180: 'frame_timer',
+    # light.c: a view of the race starting to draw (0x4daec0 calls it first; ECX the camera)
+    0x4f0770: 'terrain_light',
     0x4a54b0: 'cameras_file',
     0x4d94b0: 'race_cameras',
 }

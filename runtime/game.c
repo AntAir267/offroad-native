@@ -15,19 +15,15 @@
 #include "vk.h"
 
 /* A camera's far plane, +0x250, comes through 0x4f1350 from the race's setup and again from the camera's own stored
-   values, so a raised one comes back in. 0x4f1350 makes its depth mapping (+0x178, +0x188) from it, and the sky is
-   drawn at a fixed depth that expects the game's (raising 0x5d0e78 outright put the clouds over the banks
-   [verified: frame 4800]). So the mapping is always made from the game's number, and what culls is raised:
-   game_far_base, game_far (widescreen.c viewport_hook). Only numbers the game's own range can give are raised. */
+   values, so a raised one comes back in. All of it must be raised together: the game clips every polygon at z 1 (renderer
+   +0x400, 0x53fc20), and the fog runs to the far plane. A first go kept the depth mapping at the game's number to keep the sky
+   behind things (the fault was the missing stencil, DESIGN.md) and raised only +0x250: nothing past the game's 260 m ever drew
+   (Ant: "still fogged", then with the fog moved, "low draw distance"). Only numbers the game's own range can give are raised. */
 #define GAME_FAR_MAX 26000.0f
 static float far_scale(void)
 {
     const char *v = option_str("draw_distance", "far");
     return !strcasecmp(v, "far") ? 1.5f : !strcasecmp(v, "extreme") ? 2.5f : 1.0f;
-}
-float game_far_base(float far)
-{
-    return far > GAME_FAR_MAX ? GAME_FAR_MAX : far;
 }
 float game_far(float far)
 {
@@ -47,6 +43,8 @@ static int dust_on;
 void game_options(void)
 {
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
+    extern void light_options(void);
+    light_options();
 }
 
 /* One tick a frame. The game steps at 60 a second however fast it draws: 0x4db240 reads the time since the last frame
@@ -162,12 +160,27 @@ static int puff_draw_hook(CPU *c)
         float most = RF32(o + 0x7c), got = (float)(diffuse >> 16 & 255);
         float left = most > 0.01f ? got / (most * 255.0f) : 0.0f;
         left = left > 1.0f ? 1.0f : left;
-        diffuse = (uint32_t)(left * 0.22f * 255.0f) << 24 | 0x9a9a9au;
+        /* (eases in as it starts to fade: a new one is at full strength) */
+        float in = (1.0f - left) * 8.0f;
+        in = in > 1.0f ? 1.0f : in;
+        diffuse = (uint32_t)((in * 0.5f + 0.5f) * left * 0.22f * 255.0f) << 24 | 0x9a9a9au;
+    } else {
+        /* A wheel's puff is born whole, at its first size and strength, and removed while it still has some (0x419070: when
+           +0x70 falls under +0x78). As a sprite that hardly showed; as a volume, at speed, with the car leaving each one
+           behind in a few frames, lumps came and went about 15 times a second: Ant's smoke flicker [verified: ORR_SMOKE_DEBUG=1
+           dumps, consecutive frames]. So it grows into its strength (its age from its size: 64 at birth, +0x68 a tick) and
+           is gone by the time the game removes it. */
+        float rate = RF32(o + 0x68), left = RF32(o + 0x70) - RF32(o + 0x78);
+        float in = rate > 0.01f ? (hw - 64.0f) / rate / 10.0f : 1.0f;
+        float out = left / 0.25f;
+        in = in < 0.0f ? 0.0f : in > 1.0f ? 1.0f : in;
+        out = out < 0.0f ? 0.0f : out > 1.0f ? 1.0f : out;
+        diffuse = (uint32_t)((float)(diffuse >> 24) * in * in * out) << 24 | (diffuse & 0xffffffu);
     }
     /* (grow 1: the renderer's size history is by serial, and the game reuses objects' addresses: 0 showed a new puff
        at the size of the one before, a full-screen haze for a frame [verified: frames 4008-4010]) */
     /* a puff at the camera: nothing to see into, so gone before it fills the screen */
-    float nearby = (vz - hw) / (hw + 60.0f);
+    float nearby = (vz - hw) / (2.0f * hw + 200.0f);
     nearby = nearby < 0.0f ? 0.0f : nearby > 1.0f ? 1.0f : nearby;
     diffuse = (uint32_t)((float)(diffuse >> 24) * nearby) << 24 | (diffuse & 0xffffffu);
     vk_smoke_take(&st, q, 4, diffuse, uv);
@@ -182,5 +195,7 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    extern int light_terrain_hook(CPU *c);
+    hook_terrain_light = light_terrain_hook;
     game_options();
 }

@@ -517,6 +517,13 @@ static void ssao_passes(GpuImg *c, GpuImg *z);
 void vkr_smoke_view_end(void);
 static int smv_depth;
 static int bg_phase = 1;          /* widescreen: still in the frame's leading background tiles */
+/* Baked lighting (light.c, draw.frag's light_ratio): the maps of the race being driven and the view being drawn. Its blocks
+   are after the puffs' in sm_buf */
+#define LIGHT_VIEWS 8
+#define LIGHT_BLOCK 12
+static GpuImg *li_sun, *li_amb, *li_grid, *li_height;
+static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4]; int on, block; uint32_t mode; } li_view;
+static int li_blocks;
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
 /* Render resolution (options.txt "resolution"): "original" draws at the program's display
@@ -3184,7 +3191,8 @@ static int init(void)
         vkUpdateDescriptorSets(dev, 1, &w, 0, NULL);
     }
     {   /* the volumetric smoke's puffs: the frames' views' blocks, host-written */
-        sm_buf = dbuf_new((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1);
+        sm_buf = dbuf_new(((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (VkDeviceSize)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK) * 16,
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1);
         memset(sm_buf.map, 0, (size_t)sm_buf.size);
         VkDescriptorBufferInfo bufi = {sm_buf.buf, 0, sm_buf.size};
         VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = dset, .dstBinding = 6,
@@ -3782,6 +3790,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
         hp = 0.5f * c->sx;
     }
     float shift = 0.0f;
+    int li_lit = 0;
     /* Off-Road (widescreen.c): the world comes as screen coordinates past the 4:3 picture's sides, which
        land in the side space as they are: only the scissor grows. Flat drawings have one rhw for all
        their vertices (the HUD and menus 1, the sky's backdrop 2). In a race one filling the width fills
@@ -3806,6 +3815,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             }
         }
         int hud = flat && w0 < 1.5f && z0 < 0.02f;
+        li_lit = !flat && li_view.on;
         if (ssao_on && hud && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
             ssao_done = 1;
             ssao_passes(c, z);
@@ -3926,6 +3936,31 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     float ay = -(float)st->vp.h / H, by = (2.0f * (float)st->vp.y + 1.0f + (float)st->vp.h) / H - 1.0f;
     float mnz = st->vp.minz, dz = st->vp.maxz - st->vp.minz;
     const float pl0[6] = {ax, bx, ay, by, mnz, dz};     /* (without the scene's jitter: its motion vectors) */
+    /* what is lit by adding to or multiplying what is there keeps its colour */
+    if (li_lit && (!r[RS_ALPHABLENDENABLE] || (r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6)) && li_sun) {
+        if (li_view.block < 0 && li_blocks < LIGHT_VIEWS) {
+            li_view.block = (int)((uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)(fi * LIGHT_VIEWS + li_blocks++) * LIGHT_BLOCK);
+            float *B = (float *)sm_buf.map + (size_t)li_view.block * 4;
+            memcpy(B, li_view.m, 16 * sizeof(float));   /* the inverse's rows 0-2, then the offset */
+            /* (clip space from the game's screen x, y: as the vertices are written below) */
+            float x0 = ui_x(c, 0.5f), x1 = ui_x(c, 1.5f);
+            const float pl[4] = {2.0f * (x1 - x0) / PW, 2.0f * (x0 - 0.5f * (x1 - x0)) / PW - 1.0f, 2.0f / H, 1.0f / H - 1.0f};
+            memcpy(B + 16, pl, sizeof pl);
+            memcpy(B + 20, li_view.sun, 16);
+            memcpy(B + 24, li_view.col, 16);
+            memcpy(B + 28, li_view.amb, 16);
+            memcpy(B + 32, li_view.bounce, 16);
+            memcpy(B + 36, li_view.size, 16);
+            memcpy(B + 40, li_view.mis, 16);
+            memcpy(B + 44, li_view.eye, 16);
+        }
+        if (li_view.block >= 0) {
+            pc.inst[0] = li_view.mode;
+            pc.inst[1] = (uint32_t)li_view.block;
+            pc.inst[2] = (uint32_t)li_sun->slot | (uint32_t)li_amb->slot << 16;
+            pc.inst[3] = (uint32_t)li_grid->slot | (uint32_t)li_height->slot << 16;
+        }
+    }
     if (in_scene) {               /* temporal anti-aliasing: the scene drawn moved by the frame's jitter */
         bx += scn.jndc[0];
         by += scn.jndc[1];
@@ -5610,6 +5645,88 @@ static void sm_noise_make(void)
     free(img);
 }
 
+
+/* an image of baked lighting, with its smaller levels made here by averaging when asked */
+static GpuImg *li_image(const uint8_t *px, uint32_t w, uint32_t h, uint32_t bpp, VkFormat fmt, int mips)
+{
+    uint32_t levels = 1;
+    if (mips)
+        for (uint32_t m = w > h ? w : h; m > 1; m >>= 1)
+            levels++;
+    GpuImg *g = img_new(K_TEX, w, h, levels, fmt, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    size_t total = 0;
+    for (uint32_t l = 0, a = w, b = h; l < levels; l++, a = a > 1 ? a >> 1 : 1, b = b > 1 ? b >> 1 : 1)
+        total += (size_t)a * b * bpp;
+    DBuf st = dbuf_new((VkDeviceSize)total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 1);
+    uint8_t *o = st.map;
+    memcpy(o, px, (size_t)w * h * bpp);
+    VkBufferImageCopy *rg = calloc(levels, sizeof *rg);
+    size_t off = 0;
+    uint32_t a = w, b = h;
+    for (uint32_t l = 0; l < levels; l++) {
+        rg[l] = (VkBufferImageCopy){.bufferOffset = off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, l, 0, 1},
+                                    .imageExtent = {a, b, 1}};
+        if (l + 1 < levels) {
+            uint32_t na = a > 1 ? a >> 1 : 1, nb = b > 1 ? b >> 1 : 1;
+            uint8_t *n = o + off + (size_t)a * b * bpp, *c = o + off;
+            for (uint32_t y = 0; y < nb; y++)
+                for (uint32_t x = 0; x < na; x++)
+                    for (uint32_t k = 0; k < bpp; k++) {
+                        uint32_t x1 = a > 1 ? x * 2 + 1 : x, y1 = b > 1 ? y * 2 + 1 : y, x0 = a > 1 ? x * 2 : x, y0 = b > 1 ? y * 2 : y;
+                        n[(size_t)(y * na + x) * bpp + k] = (uint8_t)((c[(size_t)(y0 * a + x0) * bpp + k] + c[(size_t)(y0 * a + x1) * bpp + k] +
+                                                                       c[(size_t)(y1 * a + x0) * bpp + k] + c[(size_t)(y1 * a + x1) * bpp + k] + 2) / 4);
+                    }
+            off += (size_t)a * b * bpp;
+            a = na;
+            b = nb;
+        }
+    }
+    end_rendering();
+    barrier(g, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdCopyBufferToImage(cb, st.buf, g->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, levels, rg);
+    barrier(g, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    free(rg);
+    dbuf_retire(&st);
+    return g;
+}
+
+void vkr_light_load(const VkLightMaps *m)
+{
+    frame_begin();
+    GpuImg **old[4] = {&li_sun, &li_amb, &li_grid, &li_height};
+    for (int i = 0; i < 4; i++)
+        if (*old[i]) {
+            img_discard(*old[i]);
+            *old[i] = NULL;
+        }
+    if (!m->sun)
+        return;
+    li_sun = li_image(m->sun, m->sw, m->sh, 1, VK_FORMAT_R8_UNORM, 1);
+    li_amb = li_image(m->amb, m->aw, m->ah, 2, VK_FORMAT_R8G8_UNORM, 1);
+    li_grid = li_image(m->grid, m->across ? m->gw * m->layers : m->gw, m->across ? m->gh : m->gh * m->layers, 4, VK_FORMAT_R8G8B8A8_UNORM, 0);
+    li_height = li_image((const uint8_t *)m->height, m->W, m->H, 2, VK_FORMAT_R16_UNORM, 0);
+    memcpy(li_view.size, m->size, sizeof li_view.size);
+    memcpy(li_view.sun, m->sun_dir, sizeof li_view.sun);
+    memcpy(li_view.col, m->sun_col, sizeof li_view.col);
+    memcpy(li_view.amb, m->amb_col, sizeof li_view.amb);
+    memcpy(li_view.bounce, m->bounce_col, sizeof li_view.bounce);
+    li_view.mis[0] = (float)sampler_get(2, 2, 3, 3, 3, 0, 0.0f, 0, 16, 0);
+    li_view.mis[1] = m->hmin;
+    li_view.mis[2] = m->hrange;
+    li_view.mis[3] = m->across ? 1.0f : 0.0f;
+    logmsg(LOG_ALWAYS, "baked lighting: %ux%u sun, %ux%u sky, %ux%ux%u grid", m->sw, m->sh, m->aw, m->ah, m->gw, m->gh, m->layers);
+}
+
+void vkr_light_view(const float *inv16, const float *eye, uint32_t mode)
+{
+    if (!li_sun)
+        return;
+    memcpy(li_view.m, inv16, 16 * sizeof(float));
+    memcpy(li_view.eye, eye, 3 * sizeof(float));
+    li_view.mode = mode;
+    li_view.on = 1;
+    li_view.block = -1;
+}
 
 /* A see-through surface of the view (draw_impl: blended by alpha, depth tested, no depth writes,
    in 0x419280's draws, not a puff's): kept to be drawn again at the view's end, its depth and alpha
@@ -7710,6 +7827,8 @@ void vkr_present(Surface *src, const int *rect)
     bg_phase = 1;
     wide_world_last = wide_world;
     wide_world = 0;
+    li_view.on = 0;
+    li_blocks = 0;
     ssao_done = 0;
     ssao_world = 0;
     if (hp_flip && nframes % (unsigned long)hp_flip == 0)

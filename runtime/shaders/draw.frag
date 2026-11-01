@@ -58,7 +58,10 @@ layout(push_constant) uniform PC {
     uvec4 flags;
     uvec4 tnl;
     uvec4 shadow;
+    uvec4 light;
 } pc;
+layout(std430, set = 0, binding = 6) readonly buffer LightBlock { vec4 v[]; } lb;
+layout(location = 14) in vec3 v_lw;
 layout(location = 13) flat in uint v_fade;  /* an instanced copy's distance fade (tnl.vert), as flags.y */
 #ifdef SHADOW_OUTPUTS               /* (compiled twice: vk.c's main view with shadows has these) */
 #include "shadow.glsl"
@@ -172,6 +175,66 @@ vec4 stage(uint c, uint a, vec4 dif, vec4 cur, vec4 tex, vec4 tf, vec4 spec)
                                 arg(a >> 16, dif, cur, tex, tf, spec), dif, cur, tex, tf).a
                           : cur.a;
     return r;
+}
+
+/* Baked lighting (runtime/light.c, tools/bake): how much of the vertex colour the game lit a pixel with is really there.
+   The game's light is ambient + N.L sun, clamped by its largest channel [verified: 0x53fe80]; the bake says how much of the
+   sky and sun this point sees and how much bounces to it. A pixel on the terrain's own triangles reads the fine maps,
+   anything above it the grid draped over the terrain. pc.light: x 1 (2 shows the ratio alone), y the view's block, z sun |
+   amb << 16, w grid | height << 16 (texture slots). Block: 0-2 the camera's inverse, 3 its offset, 4 ax bx ay by, 5 sun
+   direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour; 9 1 / world size x, z, layers,
+   cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye. */
+vec3 li_debug;
+vec3 clamp_light(vec3 c) { return c / max(1.0, max(c.r, max(c.g, c.b))); }
+vec3 light_ratio()
+{
+    uint b = pc.light.y;
+    vec3 w = v_lw;
+    vec3 fn = cross(dFdx(w), dFdy(w));
+    float fl = length(fn);
+    fn = fl > 0.0 ? fn / fl : vec3(0.0, 1.0, 0.0);
+    if (dot(fn, lb.v[b + 11u].xyz - w) < 0.0)
+        fn = -fn;
+    vec4 sz = lb.v[b + 9u], mis = lb.v[b + 10u];
+    int smp = int(mis.x);
+    vec2 uv = w.xz * sz.xy;
+    /* the height under the pixel, on the game's two triangles a cell */
+    float cell = sz.w;
+    vec2 cf = w.xz / cell;
+    ivec2 ci = ivec2(floor(cf));
+    ivec2 ts = textureSize(sampler2D(textures[pc.light.w >> 16], samplers[smp]), 0);
+    vec2 fr = cf - vec2(ci);
+    ivec2 c0 = clamp(ci, ivec2(0), ts - 2);
+    float h00 = texelFetch(sampler2D(textures[pc.light.w >> 16], samplers[smp]), c0, 0).r,
+          h10 = texelFetch(sampler2D(textures[pc.light.w >> 16], samplers[smp]), c0 + ivec2(1, 0), 0).r,
+          h11 = texelFetch(sampler2D(textures[pc.light.w >> 16], samplers[smp]), c0 + ivec2(1, 1), 0).r,
+          h01 = texelFetch(sampler2D(textures[pc.light.w >> 16], samplers[smp]), c0 + ivec2(0, 1), 0).r;
+    float hg = fr.x >= fr.y ? h00 + (h10 - h00) * fr.x + (h11 - h10) * fr.y : h00 + (h11 - h01) * fr.x + (h01 - h00) * fr.y;
+    float dy = w.y - (mis.y + hg * mis.z);
+    float layers = sz.z, step = lb.v[b + 5u].w;
+    /* sampled in uniform control flow (mipmap selection needs derivatives): both, then the choice */
+    float gsun = texture(sampler2D(textures[pc.light.z & 0xffffu], samplers[smp]), uv).r;
+    vec2 gamb = texture(sampler2D(textures[pc.light.z >> 16], samplers[smp]), uv).rg;
+    float ly = clamp(dy / step - 0.5, 0.0, layers - 1.001), l0 = floor(ly);
+    ivec2 gs = textureSize(sampler2D(textures[pc.light.w & 0xffffu], samplers[smp]), 0);
+    bool across = mis.w > 0.5;
+    float tile = across ? uv.x : uv.y, ts_ = across ? float(gs.x) : float(gs.y);
+    float vt = clamp(tile, 0.5 * layers / ts_, 1.0 - 0.5 * layers / ts_);
+    vec2 g0uv = across ? vec2((l0 + vt) / layers, uv.y) : vec2(uv.x, (l0 + vt) / layers);
+    vec2 g1uv = across ? vec2((l0 + 1.0 + vt) / layers, uv.y) : vec2(uv.x, (l0 + 1.0 + vt) / layers);
+    vec3 g0 = textureLod(sampler2D(textures[pc.light.w & 0xffffu], samplers[smp]), g0uv, 0.0).rgb;
+    vec3 g1 = textureLod(sampler2D(textures[pc.light.w & 0xffffu], samplers[smp]), g1uv, 0.0).rgb;
+    vec3 g = mix(g0, g1, ly - l0);
+    bool on_ground = abs(dy) < 25.0;
+    float vis = on_ground ? gsun : g.r, sky = on_ground ? gamb.r : g.g, bounce = on_ground ? gamb.g : g.b;
+    float nl = max(dot(fn, lb.v[b + 5u].xyz), 0.0);
+    vec3 sunc = lb.v[b + 6u].rgb, amb = lb.v[b + 7u].rgb;
+    vec3 was = amb + sunc * nl;
+    /* (the game's ambient is a fill light, flat and strong: the sky only takes away part of it, w. Where nothing blocks
+       anything, sky and vis 1, this is exactly what the game drew) */
+    vec3 now = amb * mix(1.0, sky, lb.v[b + 7u].w) + sunc * nl * vis + lb.v[b + 8u].rgb * bounce * 3.0;
+    li_debug = pc.light.x == 3u ? vec3(fract(w.x / 5120.0), fract(w.z / 5120.0), clamp(abs(dy) / 500.0, 0.0, 1.0)) : vec3(vis, sky, nl);
+    return clamp(clamp_light(now) / max(clamp_light(was), vec3(0.001)), vec3(0.0), vec3(1.6));
 }
 
 /* the two texture stages and the specular add, for one pair of vertex colours */
@@ -438,6 +501,14 @@ void main()
     vec4 dif = flat_shade ? f_diffuse : v_diffuse;
     vec4 spec = flat_shade ? vec4(f_specular.rgb, v_specular.a) : v_specular;
     vec4 tf = argb(pc.misc.z);
+    if (pc.light.x != 0u) {
+        vec3 lr = light_ratio();
+        dif.rgb *= lr;
+        if (pc.light.x >= 2u) {        /* ORR_LIGHT_DEBUG: 2 the ratio alone, 3 where it thinks it is, 4 sun, sky, N.L */
+            o_color = vec4(pc.light.x == 2u ? lr * 0.5 : li_debug, 1.0);
+            return;
+        }
+    }
     /* sample first, in uniform control flow (mipmap selection needs derivatives) */
     vec4 t0 = vec4(1.0), t1 = vec4(1.0);
 #ifdef RT_REFLECT

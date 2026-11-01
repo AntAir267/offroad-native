@@ -57,23 +57,14 @@ static int viewport_hook(CPU *c)
         W32(p + 4, b.u);
         W32(p + 0x24, n.u);
     }
-    /* the far plane (game.c): the depth mapping made from the game's, what culls from the raised */
+    /* the far plane (game.c): raised for everything made from it, the depth mapping, culling and fog */
     extern float game_far(float far);
     uint32_t far_bits = R32(p + 0x20);
     float far_in = RF32(p + 0x20), far_cull = allowed ? game_far(far_in) : far_in;
-    extern float game_far_base(float far);
-    union { float f; uint32_t u; } fb = {allowed ? game_far_base(far_in) : far_in};
+    union { float f; uint32_t u; } fb = {far_cull};
     W32(p + 0x20, fb.u);
     F_004f1350_orig(c);
     W32(p + 0x20, far_bits);
-    if (allowed) {
-        union { float f; uint32_t u; } fc = {far_cull};
-        W32(cam + 0x250, fc.u);
-        /* the fog runs over (1/rhw - +0x270) * +0x274, 1 / (far - near) from the same far plane [verified: 0x4f1350,
-           readers 0x53fe80, 0x545500, 0x527e60]: it goes out with what is drawn, or the extra distance is all fog */
-        union { float f; uint32_t u; } fs = {1.0f / (far_cull - RF32(cam + 0x24c))};
-        W32(cam + 0x274, fs.u);
-    }
     if (widen) {
         W32(p, fx);
         W32(p + 4, fy);

@@ -8,6 +8,7 @@
 #extension GL_GOOGLE_include_directive : require
 #define MOTION_VERTEX
 #include "motion.glsl"
+#endif
 layout(push_constant) uniform PC {
     uvec4 stage;
     ivec4 texsmp;
@@ -16,8 +17,9 @@ layout(push_constant) uniform PC {
     uvec4 flags;
     uvec4 tnl;                  /* x: the draw's Motion block */
     uvec4 shadow;
+    uvec4 light;                /* baked lighting (draw.frag): x on, y the view's block */
 } pc;
-#endif
+layout(std430, set = 0, binding = 6) readonly buffer LightBlock { vec4 v[]; } lb;
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec4 a_diffuse;
 layout(location = 2) in vec4 a_specular;
@@ -34,6 +36,7 @@ layout(location = 7) flat out vec4 f_dsh;
 layout(location = 8) flat out vec4 f_ssh;
 layout(location = 9) out vec3 v_wpos;
 layout(location = 13) flat out uint v_fade;   /* (tnl.vert's instanced copies' fade: none here) */
+layout(location = 14) out vec3 v_lw;          /* baked lighting: the world position */
 
 void main()
 {
@@ -50,6 +53,15 @@ void main()
     v_ssh = a_specular;
     f_ssh = a_specular;
     v_wpos = vec3(0.0);
+    v_lw = vec3(0.0);
+    if (pc.light.x != 0u) {
+        /* back from clip space to the game's screen x and y times w, and through the camera's matrix backwards: what
+           the fragment gets is linear in view space, so correct across a triangle */
+        uint b = pc.light.y;
+        vec4 pl = lb.v[b + 4u];
+        vec3 q = vec3((a_pos.x - pl.y * a_pos.w) / pl.x, (a_pos.y - pl.w * a_pos.w) / pl.z, a_pos.w) - lb.v[b + 3u].xyz;
+        v_lw = vec3(dot(lb.v[b].xyz, q), dot(lb.v[b + 1u].xyz, q), dot(lb.v[b + 2u].xyz, q));
+    }
 #ifdef MOTION
     motion_out(a_pos, pc.tnl.x);    /* (the previous frame's matrix takes this frame's clip space) */
 #endif

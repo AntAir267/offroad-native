@@ -134,6 +134,15 @@ extern const VkPuff *vk_puff;
 extern int vk_smoke_depth;        /* depth buffers can be read (the volumes do) */
 extern int vk_smoke_parts;        /* the see-through parts are being drawn: glass, lattices (not puffs) are kept,
                                      to be drawn again at the view's end (the puffs behind them seen through them) */
+/* Baked lighting (light.c): a race's maps (no sun: none), and the camera each view; the pointers stay good until the next load */
+typedef struct {
+    const uint8_t *sun, *amb, *grid;
+    const uint16_t *height;
+    uint32_t W, H, sw, sh, aw, ah, gw, gh, layers, across;
+    float size[4], sun_dir[4], sun_col[4], amb_col[4], bounce_col[4], hmin, hrange;
+} VkLightMaps;
+void vk_light_load(const VkLightMaps *m);
+void vk_light_view(const float *inv16, const float *eye, uint32_t mode);
 void vk_smoke_view_begin(const VkSmokeView *v);
 void vk_smoke_view_end(void);
 void vk_smoke_take(const D3DState *st, const float (*pos)[3], int n, uint32_t diffuse, const float (*uv)[2]);

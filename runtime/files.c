@@ -202,6 +202,10 @@ API(KERNEL32, CreateFileA, 7)
     const char *name = gstr(ARG(0));
     uint32_t access = ARG(1), disp = ARG(4);
     int writing = (access & GENERIC_WRITE) != 0;
+    {
+        extern void light_file_opened(const char *name);
+        light_file_opened(name);
+    }
     char host[2048];
     int keep = disp == 3 /* OPEN_EXISTING */ || disp == 4 /* OPEN_ALWAYS */;
     int exists = path_to_host(name, host, sizeof host, writing ? (keep ? 2 : 1) : 0);

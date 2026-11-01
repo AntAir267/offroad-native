@@ -44,6 +44,7 @@ static Row rows[] = {
     {"draw_distance", "far", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0},
     {"ambient_occlusion", "on", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"volumetric_dust", "on", "Volumetric Dust", "Real Clouds Of Dust And Exhaust Smoke", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
+    {"baked_lighting", "on", "Ray-Traced Lighting", "Real Shadows And Shade", 2, {"Original", "Baked"}, {"off", "on"}, 0, 0, 0},
 };
 #define NROWS ((int)(sizeof rows / sizeof *rows))
 
