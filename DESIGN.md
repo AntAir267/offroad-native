@@ -155,6 +155,14 @@ Particle flicker where cars' clouds overlap (Ant found it): overlap passed the m
 
 Countdown: laid out right of the middle by the game (centres 525 and 558 of 1024); centred in vk.c by its size and place. [verified: frames, 3, 2, 1, GO]
 
+Car lights (More Options, Car Lights; light.c, draw.frag): per pixel, after the bake's ratio and not under night's darkening. Cars are collected as they draw (0x497d50, ECX the car) and their matrices read at each view's start (object +0x24: three rows of four, then position; forward is the third row [verified: beams point the right way]). One beam from the front with a cone and fall-off, a red glow behind; fixed offsets, not each car's lamp points from mods.dat. Strength 1 at night, 0.3 at sunset and in rain, off by day. Blended draws do not take them. About 0.3 ms at 1440p.
+
+Track lights (More Options): glowing faces of the lamp_onoff*_add materials clustered into lamps (export.py), bake --lamps: a reach of 40 m, shadows by rays, into <slug>.oll: ground 8 texels a cell, grid as the bake's. Added like car lights: night 1, sunset 0.35. Which lamps the game switches off by time of day (0x4d9a50: light_beam, light_sset) is not followed.
+
+Headlight shadows (More Options, Car Light Shadows): real ray queries where the device has them: draw.frag built with LIGHT_RAYS (Makefile rule) is the one used if rt_ok; the rays are skipped by a block value otherwise. <slug>.rtg: the solid scenery as triangles, no terrain, no cut-outs with holes (trees, fences), so these cast none; bottom level vkr_shadow_terrain, top level in view slot 0, unused by this game. Cars cast none. One ray a pixel in the beam.
+
+Don't wait on a process with pgrep -f on its own name in a shell loop: the loop matches itself (cost an hour).
+
 Debug launcher: tools/dev/race.sh, any location, track, car, paint, time and weather through the Time Trial menus, all cars unlocked (ORR_UNLOCK_ALL hooks 0x4784f0, ORR_RACE_LOOK writes 0x5cea00 at 0x4da920). The header lists the numbers. Keys at 50-frame spacing: 30 dropped some.
 
 Streamer mode (VIDEO > More Options, game.c texture_name_hook): the seven flagged paints load the car's plain paint, also dirty and muddy, for AI cars and previews too. List from the 3D Car Garage chat, each texture looked at: Blackfoot 3, 4 (bug15); Comanche 3, 4 (bug05); Bronco 3 (bug14); Polecat 3 (bug20); Firesole 5 (bug17). The menu still offers those numbers, showing plain.

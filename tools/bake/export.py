@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Turn a track of the rip (Car Models/Off-Road Redneck Racing/models/tracks) into what bake.c casts rays at.
 
-    export.py SLUG OUT.geo
+    export.py SLUG OUT.geo [OUT.rtg]
 
 Game units (x back from glTF's -x, 100 to the metre). What blocks light: the terrain and every opaque or cut-out part of
 the scenery, not the water, sky, puddles, racing line, or the rain-only and see-through parts.
 OUT.geo, little endian: 'OGEO', W, H, nmat, ntri (u32); W * H f32 heights; nmat {u32 tw, th; f32 albedo[3]; tw * th u8 alpha};
-ntri {f32 p[9]; f32 uv[6]; u32 mat (bit 31: the terrain)}."""
-import io, json, os, struct, sys
+ntri {f32 p[9]; f32 uv[6]; u32 mat (bit 31: the terrain)}; u32 nlamp; nlamp {f32 pos[3], dir[3]}."""
+import io, json, os, struct, sys, zlib
 import numpy as np
 from PIL import Image
 
@@ -24,7 +24,7 @@ def read_glb(path):
     return g, memoryview(d)[28 + n:28 + n + m]
 
 
-def main(slug, out):
+def main(slug, out, rt_out=None):
     g, b = read_glb(f'{T}/glb/{slug}.glb')
     WIDTHS = {5120: 'i1', 5121: 'u1', 5122: 'i2', 5123: 'u2', 5125: 'u4', 5126: 'f4'}
     COUNT = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}
@@ -63,6 +63,7 @@ def main(slug, out):
 
     tris = []
     height = None
+    lamps = []                       # the glowing faces of the map's lamps, as (centre, normal)
 
     def node_mat(n):
         if 'matrix' in n:
@@ -81,6 +82,18 @@ def main(slug, out):
             return
         if 'mesh' in n:
             is_terrain = name == 'terrain'
+            for p in g['meshes'][n['mesh']]['primitives']:
+                if 'lamp_onoff' in g['materials'][p.get('material', 0)]['name'] and g['materials'][p.get('material', 0)]['name'].endswith('_add'):
+                    pos = acc(p['attributes']['POSITION']).astype(float)
+                    w = (M[:3, :3] @ pos.T).T + M[:3, 3]
+                    w = w / S
+                    w[:, 0] *= -1
+                    idx = acc(p['indices']).reshape(-1, 3).astype(int) if 'indices' in p else np.arange(len(pos)).reshape(-1, 3)
+                    for t in idx:
+                        a, b_, c = w[t[0]], w[t[1]], w[t[2]]
+                        nrm = np.cross(b_ - a, c - a)
+                        nl = np.linalg.norm(nrm)
+                        lamps.append(((a + b_ + c) / 3, nrm / nl if nl > 0 else np.array([0, -1.0, 0])))
             for p in g['meshes'][n['mesh']]['primitives']:
                 mid = p.get('material', 0)
                 if not mats[mid][0]:
@@ -117,8 +130,29 @@ def main(slug, out):
         rec = np.zeros(len(P), dtype=[('p', '<f4', 9), ('uv', '<f4', 6), ('m', '<u4')])
         rec['p'] = P; rec['uv'] = U; rec['m'] = M
         f.write(rec.tobytes())
-    print(slug, 'cells', W, H, 'tris', len(P), 'terrain', int((M >> 31).sum()), 'height', hf.min(), hf.max())
+        # one light for each lamp: faces within a metre and a half together, pointing the way that is most downward
+        clusters = []
+        for c, nr in lamps:
+            for k in clusters:
+                if np.linalg.norm(k[0] / k[2] - c) < 150:
+                    k[0] += c
+                    k[1] += nr if nr[1] <= 0 else -nr
+                    k[2] += 1
+                    break
+            else:
+                clusters.append([c.copy(), (nr if nr[1] <= 0 else -nr).copy(), 1])
+        f.write(struct.pack('<I', len(clusters)))
+        for c, nr, k in clusters:
+            d = nr / (np.linalg.norm(nr) or 1)
+            f.write(struct.pack('<6f', *(c / k), *d))
+    # what headlights' rays hit in the game: the solid scenery, without the terrain or see-through cut-outs (trees, fences)
+    if rt_out:
+        full = [mt[1] == 0 or sum(c >= 128 for c in mt[4]) >= 0.97 * len(mt[4]) for mt in mats]      # (a cut-out with next to no holes counts)
+        solid = (M >> 31 == 0) & np.array([full[m & 0x7fffffff] for m in M.tolist()])
+        with open(rt_out, 'wb') as f:
+            f.write(b'ORTG' + struct.pack('<I', int(solid.sum())) + zlib.compress(P[solid].tobytes(), 6))
+    print(slug, 'lamps', len(clusters), 'cells', W, H, 'tris', len(P), 'terrain', int((M >> 31).sum()), 'height', hf.min(), hf.max())
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
+    main(*sys.argv[1:4])

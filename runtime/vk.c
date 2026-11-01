@@ -59,6 +59,7 @@
 #include "shaders/draw.frag.shadow.motion.spv.h"
 #include "shaders/taa.frag.spv.h"
 #include "shaders/taau.frag.spv.h"
+#include "shaders/draw.frag.rays.spv.h"
 #include "shaders/smoke.vert.spv.h"
 #include "shaders/smoke.frag.spv.h"
 #include "shaders/smoke.frag.motion.spv.h"
@@ -520,9 +521,9 @@ static int bg_phase = 1;          /* widescreen: still in the frame's leading ba
 /* Baked lighting (light.c, draw.frag's light_ratio): the maps of the race being driven and the view being drawn. Its blocks
    are after the puffs' in sm_buf */
 #define LIGHT_VIEWS 8
-#define LIGHT_BLOCK 36              /* 12, then 12 cars x 2 */
-static GpuImg *li_sun, *li_amb, *li_grid, *li_height;
-static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4], cars[96]; int on, block; uint32_t mode; } li_view;
+#define LIGHT_BLOCK 37              /* 12, then 12 cars x 2, then the lamps */
+static GpuImg *li_sun, *li_amb, *li_grid, *li_height, *li_lamp, *li_lampg;
+static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4], cars[96], lamp[4]; int on, block; uint32_t mode; } li_view;
 static int li_blocks;
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
@@ -3234,7 +3235,7 @@ static int init(void)
     VKC(vkCreatePipelineLayout(dev, &pli, NULL, &playout));
     sm_dv = shader(spv_draw_vert, sizeof spv_draw_vert);
     sm_tv = shader(spv_tnl_vert, sizeof spv_tnl_vert);
-    sm_df = shader(spv_draw_frag, sizeof spv_draw_frag);
+    sm_df = rt_ok ? shader(spv_draw_frag_rays, sizeof spv_draw_frag_rays) : shader(spv_draw_frag, sizeof spv_draw_frag);
     sm_dfs = shader(spv_draw_frag_shadow, sizeof spv_draw_frag_shadow);
     sm_dfr = shader(spv_draw_frag_refl, sizeof spv_draw_frag_refl);
     sm_tvm = shader(spv_tnl_vert_motion, sizeof spv_tnl_vert_motion);
@@ -3996,6 +3997,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             memcpy(B + 40, li_view.mis, 16);
             memcpy(B + 44, li_view.eye, 16);
             memcpy(B + 48, li_view.cars, sizeof li_view.cars);
+            memcpy(B + 144, li_view.lamp, 16);
         }
         if (li_view.block >= 0) {
             /* (a flat draw at night, the sky: only darker. What is blended over the rest, the water's spray most of all, sheets
@@ -5692,6 +5694,43 @@ static void sm_noise_make(void)
 }
 
 
+/* The track's solid scenery for the car lights' rays: the map's bottom level and a top level of one instance, in the first view
+   slot, which this game's views do not use. */
+int vkr_shadow_terrain(const float *xyz, uint32_t nv, const uint32_t *idx, uint32_t ni);
+static int li_rays(const float *tris, uint32_t n)
+{
+    uint32_t *idx = malloc((size_t)n * 3 * 4);
+    if (!idx)
+        return 0;
+    for (uint32_t i = 0; i < n * 3; i++)
+        idx[i] = i;
+    int ok = vkr_shadow_terrain(tris, n * 3, idx, n * 3);
+    free(idx);
+    if (!ok)
+        return 0;
+    struct ShFrame *s = &shf[0];
+    const VkTransformMatrixKHR ident = {{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}}};
+    *(VkAccelerationStructureInstanceKHR *)s->inst.map = (VkAccelerationStructureInstanceKHR){
+        .transform = ident, .mask = 0xff, .flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
+        .accelerationStructureReference = terr_blas.addr};
+    VkAccelerationStructureGeometryKHR g = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR, .geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR,
+        .geometry.instances = {.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
+                               .data.deviceAddress = s->inst.addr}};
+    scratch_reserve(&sh_scratch[fi], tlas_scratch);
+    VkAccelerationStructureBuildGeometryInfoKHR tb = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+        .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+        .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR, .dstAccelerationStructure = s->tlas.as,
+        .geometryCount = 1, .pGeometries = &g, .scratchData.deviceAddress = sh_scratch[fi].addr};
+    VkAccelerationStructureBuildRangeInfoKHR tr = {.primitiveCount = 1};
+    const VkAccelerationStructureBuildRangeInfoKHR *ptr = &tr;
+    p_build_as(cb, 1, &tb, &ptr);
+    as_barrier();
+    return 1;
+}
+
 /* an image of baked lighting, with its smaller levels made here by averaging when asked */
 static GpuImg *li_image(const uint8_t *px, uint32_t w, uint32_t h, uint32_t bpp, VkFormat fmt, int mips)
 {
@@ -5739,8 +5778,8 @@ static GpuImg *li_image(const uint8_t *px, uint32_t w, uint32_t h, uint32_t bpp,
 void vkr_light_load(const VkLightMaps *m)
 {
     frame_begin();
-    GpuImg **old[4] = {&li_sun, &li_amb, &li_grid, &li_height};
-    for (int i = 0; i < 4; i++)
+    GpuImg **old[6] = {&li_sun, &li_amb, &li_grid, &li_height, &li_lamp, &li_lampg};
+    for (int i = 0; i < 6; i++)
         if (*old[i]) {
             img_discard(*old[i]);
             *old[i] = NULL;
@@ -5751,11 +5790,22 @@ void vkr_light_load(const VkLightMaps *m)
     li_amb = li_image(m->amb, m->aw, m->ah, 2, VK_FORMAT_R8G8_UNORM, 1);
     li_grid = li_image(m->grid, m->across ? m->gw * m->layers : m->gw, m->across ? m->gh : m->gh * m->layers, 4, VK_FORMAT_R8G8B8A8_UNORM, 0);
     li_height = li_image((const uint8_t *)m->height, m->W, m->H, 2, VK_FORMAT_R16_UNORM, 0);
+    li_view.lamp[2] = 0.0f;
+    if (m->lamp) {
+        li_lamp = li_image(m->lamp, m->lw, m->lh, 1, VK_FORMAT_R8_UNORM, 1);
+        li_lampg = li_image(m->lampg, m->across ? m->gw * m->layers : m->gw, m->across ? m->gh : m->gh * m->layers, 1, VK_FORMAT_R8_UNORM, 0);
+        li_view.lamp[0] = (float)li_lamp->slot;
+        li_view.lamp[1] = (float)li_lampg->slot;
+        li_view.lamp[2] = m->lamp_strength;
+    }
     memcpy(li_view.size, m->size, sizeof li_view.size);
     memcpy(li_view.sun, m->sun_dir, sizeof li_view.sun);
     memcpy(li_view.col, m->sun_col, sizeof li_view.col);
     memcpy(li_view.amb, m->amb_col, sizeof li_view.amb);
     memcpy(li_view.bounce, m->bounce_col, sizeof li_view.bounce);
+    li_view.lamp[3] = 0.0f;
+    if (m->rt && m->nrt && rt_ok && li_rays(m->rt, m->nrt))
+        li_view.lamp[3] = 1.0f;
     li_view.mis[0] = (float)sampler_get(2, 2, 3, 3, 3, 0, 0.0f, 0, 16, 0);
     li_view.mis[1] = m->hmin;
     li_view.mis[2] = m->hrange;

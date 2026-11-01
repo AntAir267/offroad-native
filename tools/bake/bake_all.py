@@ -33,8 +33,14 @@ def main(args):
         layout = m.group(1) + ('r' if m.group(2) else '')
         env = j['place'].lower()
         geo = f'{WORK}/{slug}.geo'
-        if not os.path.exists(geo):
-            subprocess.check_call([sys.executable, f'{HERE}/export.py', slug, geo])
+        rtg = f'{OUT}/{slug}.rtg'
+        if not os.path.exists(geo) or not os.path.exists(rtg):
+            subprocess.check_call([sys.executable, f'{HERE}/export.py', slug, geo, rtg])
+        oll = f'{OUT}/{slug}.oll'
+        if not os.path.exists(oll):
+            subprocess.check_call(['nice', '-n', '15', f'{WORK}/bake', '--lamps', geo, oll + '.part', threads])
+            if os.path.exists(oll + '.part'):
+                os.replace(oll + '.part', oll)
         suns = []
         for t in j['times']:
             g = t['sun']['dir']

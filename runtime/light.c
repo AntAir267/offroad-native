@@ -19,8 +19,9 @@
 
 static char want_env[32], want_look[32], want_layout[32];
 static int want_changed;
-static uint8_t *m_sun, *m_amb, *m_grid;
+static uint8_t *m_sun, *m_amb, *m_grid, *m_lamp, *m_lampg;
 static uint16_t *m_height;
+static float *m_rt;
 static float light_dir[3];
 #define MAX_CARS 12
 static uint32_t cars[MAX_CARS];
@@ -98,7 +99,7 @@ static uint8_t *section(FILE *f, size_t want)
 /* (kept until the next load: the render thread reads them later) */
 static void load(void)
 {
-    static uint8_t *old[3];
+    static uint8_t *old[5];
     static uint16_t *oldh;
     VkLightMaps m;
     memset(&m, 0, sizeof m);
@@ -181,14 +182,69 @@ static void load(void)
         }
         if (f)
             fclose(f);
+        /* what the car lights' rays hit */
+        if (m.sun && !strcasecmp(option_str("car_light_shadows", "on"), "on")) {
+            char rtg[512];
+            snprintf(rtg, sizeof rtg, "%s/%s", maps_dir(), file);
+            char *us = strrchr(rtg, '_');
+            if (us)
+                strcpy(us, ".rtg");
+            FILE *rf = fopen(rtg, "rb");
+            uint32_t rh[2];
+            if (rf && fread(rh, sizeof rh, 1, rf) == 1 && rh[0] == 0x4754524fu) {
+                fseek(rf, 0, SEEK_END);
+                long end = ftell(rf);
+                fseek(rf, 8, SEEK_SET);
+                uint8_t *z = malloc((size_t)end - 8);
+                uLongf got = (uLongf)rh[1] * 36;
+                free(m_rt);
+                m_rt = malloc(got);
+                if (z && m_rt && fread(z, 1, (size_t)end - 8, rf) == (size_t)end - 8 && uncompress((uint8_t *)m_rt, &got, z, (uLong)end - 8) == Z_OK) {
+                    m.rt = m_rt;
+                    m.nrt = rh[1];
+                }
+                free(z);
+            }
+            if (rf)
+                fclose(rf);
+        }
+        /* the map's own lamps, for the layout (not every map has any): at night and dusk */
+        if (m.sun) {
+            char oll[512];
+            snprintf(oll, sizeof oll, "%s/%s", maps_dir(), file);
+            char *us = strrchr(oll, '_');
+            if (us)
+                strcpy(us, ".oll");
+            FILE *lf = fopen(oll, "rb");
+            uint32_t lh_[6];
+            if (lf && fread(lh_, sizeof lh_, 1, lf) == 1 && lh_[0] == 0x314c4c4fu && lh_[3] == m.gw && lh_[4] == m.gh && lh_[5] == m.layers) {
+                m_lamp = section(lf, (size_t)lh_[1] * lh_[2]);
+                m_lampg = section(lf, (size_t)lh_[3] * lh_[4] * lh_[5]);
+                if (m_lamp && m_lampg) {
+                    if (m.across) {
+                        uint8_t *g = malloc((size_t)m.gw * m.gh * m.layers);
+                        for (uint32_t l = 0; l < m.layers; l++)
+                            for (uint32_t r = 0; r < m.gh; r++)
+                                memcpy(g + (size_t)r * m.gw * m.layers + (size_t)l * m.gw, m_lampg + (size_t)(l * m.gh + r) * m.gw, m.gw);
+                        free(m_lampg);
+                        m_lampg = g;
+                    }
+                    m.lamp = m_lamp; m.lampg = m_lampg; m.lw = lh_[1]; m.lh = lh_[2];
+                    m.lamp_strength = strcasecmp(option_str("map_lights", "on"), "on") ? 0.0f : !strncmp(want_look, "night", 5) ? 1.0f : !strncmp(want_look, "sunset", 6) ? 0.35f : 0.0f;
+                }
+            }
+            if (lf)
+                fclose(lf);
+        }
     }
     ncars = 0;
     LOG(LOG_ALWAYS, "baked lighting: %s track %s %s: %s", want_env, want_layout, want_look, m.sun ? file : "no maps");
     vk_light_load(&m);
     /* the last ones: the render thread has had its load command before it can reach this point again */
-    free(old[0]); free(old[1]); free(old[2]); free(oldh);
+    free(old[0]); free(old[1]); free(old[2]); free(old[3]); free(old[4]); free(oldh);
     old[0] = m.sun ? m_sun : NULL; old[1] = m.sun ? m_amb : NULL; old[2] = m.sun ? m_grid : NULL; oldh = m.sun ? m_height : NULL;
-    m_sun = m_amb = m_grid = NULL;
+    old[3] = m_lamp; old[4] = m_lampg;
+    m_sun = m_amb = m_grid = m_lamp = m_lampg = NULL;
     m_height = NULL;
 }
 

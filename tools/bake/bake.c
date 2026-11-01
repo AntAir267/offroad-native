@@ -29,6 +29,7 @@
 #define SUN_RADIUS 0.0175f       /* a degree: a soft edge, more than the real sun's quarter */
 #define T_MAX 1e7f
 
+#define FIT(n, t) ((n) * (t) > MAX_SIZE ? MAX_SIZE : (n) * (t))
 typedef struct { float x, y, z; } V;
 static V add(V a, V b) { return (V){a.x + b.x, a.y + b.y, a.z + b.z}; }
 static V sub(V a, V b) { return (V){a.x - b.x, a.y - b.y, a.z - b.z}; }
@@ -386,6 +387,69 @@ static void *worker(void *arg)
     }
 }
 
+/* ---- the map's own lamps: bake --lamps IN.geo OUT.oll: one number at each point, how much they light it, shadows and all */
+#define LAMP_TEXELS 8
+#define LAMP_REACH 4000.0f
+typedef struct { V p, d; } Lamp;
+static Lamp *lamps;
+static uint32_t nlamps;
+static uint8_t *lamp_ground, *lamp_grid;
+static float lamp_at(V o, const V *n)
+{
+    float sum = 0;
+    for (uint32_t i = 0; i < nlamps; i++) {
+        V t = sub(lamps[i].p, o);
+        float dd = dot(t, t);
+        if (dd > LAMP_REACH * LAMP_REACH || dd < 1.0f)
+            continue;
+        float dl = sqrtf(dd);
+        V td = mul(t, 1.0f / dl);
+        float nl = n ? dot(*n, td) : 1.0f;
+        if (nl <= 0)
+            continue;
+        /* mostly the way it points, some all round; gone by its reach */
+        float beam = -dot(lamps[i].d, td), edge = 1.0f - dl / LAMP_REACH;
+        float k = (0.25f + 0.75f * (beam > 0 ? beam : 0)) * nl * edge / (1.0f + dd / (700.0f * 700.0f));
+        if (k < 0.004f)
+            continue;
+        if (fabsf(td.x) < 1e-5f) td.x = 1e-5f;
+        if (fabsf(td.y) < 1e-5f) td.y = 1e-5f;
+        if (fabsf(td.z) < 1e-5f) td.z = 1e-5f;
+        Ray r = ray_new(o, td);
+        if (!trace(&r, dl - 30.0f, 1, NULL, NULL))
+            sum += k;
+    }
+    return sum;
+}
+static void *lamp_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        uint32_t k = __atomic_fetch_add(&next_row, 1, __ATOMIC_RELAXED);
+        if (k >= total_rows)
+            return NULL;
+        if (k < out.sh) {
+            float z = ((float)k + 0.5f) / (float)out.sh * (float)(H - 1) * CELL;
+            for (uint32_t i = 0; i < out.sw; i++) {
+                float x = ((float)i + 0.5f) / (float)out.sw * (float)(W - 1) * CELL, y;
+                V n;
+                ground(x, z, &y, &n);
+                lamp_ground[k * out.sw + i] = u8f(lamp_at(add((V){x, y, z}, mul(n, 8.0f)), &n));
+            }
+            continue;
+        }
+        k -= out.sh;
+        uint32_t layer = k / out.gh, row = k % out.gh;
+        float z = ((float)row + 0.5f) / (float)out.gh * (float)(H - 1) * CELL;
+        for (uint32_t i = 0; i < out.gw; i++) {
+            float x = ((float)i + 0.5f) / (float)out.gw * (float)(W - 1) * CELL, y;
+            V n;
+            ground(x, z, &y, &n);
+            lamp_grid[((size_t)layer * out.gh + row) * out.gw + i] = u8f(lamp_at((V){x, y + ((float)layer + 0.5f) * GRID_STEP, z}, NULL));
+        }
+    }
+}
+
 static void put(FILE *f, const void *data, size_t n)
 {
     uLongf cap = compressBound((uLong)n);
@@ -399,8 +463,13 @@ static void put(FILE *f, const void *data, size_t n)
 
 int main(int argc, char **argv)
 {
-    if (argc < 6) {
-        fprintf(stderr, "bake IN.geo OUT.olm sx sy sz [threads]\n");
+    int lamp_mode = argc > 1 && !strcmp(argv[1], "--lamps");
+    if (lamp_mode) {
+        argv++;
+        argc--;
+    }
+    if (argc < (lamp_mode ? 3 : 6)) {
+        fprintf(stderr, "bake IN.geo OUT.olm sx sy sz [threads] | bake --lamps IN.geo OUT.oll [threads]\n");
         return 2;
     }
     FILE *f = fopen(argv[1], "rb");
@@ -441,6 +510,32 @@ int main(int argc, char **argv)
     nodes = malloc((size_t)ntri * 2 * sizeof *nodes);
     nnodes = 1;
     build(0, 0, ntri);
+    if (lamp_mode) {
+        uint8_t *q = p + (size_t)ntri * 64;
+        nlamps = *(uint32_t *)q;
+        lamps = (Lamp *)(q + 4);
+        if (!nlamps)
+            return 0;
+        out.sw = FIT(W - 1, LAMP_TEXELS); out.sh = FIT(H - 1, LAMP_TEXELS);
+        out.gw = FIT(W - 1, GRID_TEXELS); out.gh = FIT(H - 1, GRID_TEXELS);
+        lamp_ground = calloc((size_t)out.sw * out.sh, 1);
+        lamp_grid = calloc((size_t)out.gw * out.gh * GRID_LAYERS, 1);
+        total_rows = out.sh + out.gh * GRID_LAYERS;
+        int nt = argc > 3 ? atoi(argv[3]) : 8;
+        pthread_t th[64];
+        nt = nt > 64 ? 64 : nt;
+        for (int i = 0; i < nt; i++)
+            pthread_create(&th[i], NULL, lamp_worker, NULL);
+        for (int i = 0; i < nt; i++)
+            pthread_join(th[i], NULL);
+        f = fopen(argv[2], "wb");
+        uint32_t head[6] = {0x314c4c4fu, out.sw, out.sh, out.gw, out.gh, GRID_LAYERS};
+        fwrite(head, sizeof head, 1, f);
+        put(f, lamp_ground, (size_t)out.sw * out.sh);
+        put(f, lamp_grid, (size_t)out.gw * out.gh * GRID_LAYERS);
+        fclose(f);
+        return 0;
+    }
 
     sun_dir = norm((V){(float)atof(argv[3]), (float)atof(argv[4]), (float)atof(argv[5])});
     V t = fabsf(sun_dir.x) > 0.5f ? (V){0, 1, 0} : (V){1, 0, 0};
@@ -451,7 +546,6 @@ int main(int argc, char **argv)
     if (fabsf(sun_dir.y) < 1e-5f) sun_dir.y = 1e-5f;
     if (fabsf(sun_dir.z) < 1e-5f) sun_dir.z = 1e-5f;
 
-#define FIT(n, t) ((n) * (t) > MAX_SIZE ? MAX_SIZE : (n) * (t))
     out.sw = FIT(W - 1, SUN_TEXELS); out.sh = FIT(H - 1, SUN_TEXELS);
     out.aw = FIT(W - 1, AMB_TEXELS); out.ah = FIT(H - 1, AMB_TEXELS);
     out.gw = FIT(W - 1, GRID_TEXELS); out.gh = FIT(H - 1, GRID_TEXELS);

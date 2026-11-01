@@ -138,6 +138,11 @@ extern int vk_smoke_parts;        /* the see-through parts are being drawn: glas
 typedef struct {
     const uint8_t *sun, *amb, *grid;
     const uint16_t *height;
+    const uint8_t *lamp, *lampg;         /* the map's lamps (may be none), R8: lw x lh; the grid's size */
+    uint32_t lw, lh;
+    float lamp_strength;
+    const float *rt;                     /* what the car lights' rays hit: nrt triangles (may be none) */
+    uint32_t nrt;
     uint32_t W, H, sw, sh, aw, ah, gw, gh, layers, across;
     float size[4], sun_dir[4], sun_col[4], amb_col[4], bounce_col[4], hmin, hrange;
 } VkLightMaps;

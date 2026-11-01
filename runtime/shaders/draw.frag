@@ -38,6 +38,9 @@
    blended), attachment 4 the reactive (r) and transparency and composition (g) masks (MAX
    blending). */
 #version 460
+#ifdef LIGHT_RAYS
+#extension GL_EXT_ray_query : require
+#endif
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_GOOGLE_include_directive : require
 #ifdef RT_REFLECT
@@ -61,6 +64,9 @@ layout(push_constant) uniform PC {
     uvec4 light;
 } pc;
 layout(std430, set = 0, binding = 6) readonly buffer LightBlock { vec4 v[]; } lb;
+#ifdef LIGHT_RAYS
+layout(set = 0, binding = 4) uniform accelerationStructureEXT light_tlas[16];
+#endif
 layout(location = 14) in vec3 v_lw;
 layout(location = 15) in vec3 v_lr;
 layout(location = 13) flat in uint v_fade;  /* an instanced copy's distance fade (tnl.vert), as flags.y */
@@ -184,7 +190,7 @@ vec4 stage(uint c, uint a, vec4 dif, vec4 cur, vec4 tex, vec4 tf, vec4 spec)
    anything above it the grid draped over the terrain. pc.light: x 1 (5 a flat draw, only night's brightness; 2 shows the ratio alone), y the view's block, z sun |
    amb << 16, w grid | height << 16 (texture slots). Block: 0-2 the camera's inverse, 3 its offset, 4 ax bx ay by, 5 sun
    direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour, night's brightness; 9 1 / world size x, z, layers,
-   cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye, how many cars; 12 on, each car two: pos, strength; forward. */
+   cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye, how many cars; 12 on, each car two: pos, strength; forward; 36 the map's lamps' two images, how strong. */
 vec3 li_debug;
 vec3 li_add = vec3(0.0);
 vec3 clamp_light(vec3 c) { return c / max(1.0, max(c.r, max(c.g, c.b))); }
@@ -249,6 +255,16 @@ vec3 light_ratio()
         vec3 dn = d / max(dl, 1.0);
         float cone = smoothstep(0.80, 0.97, dot(dn, cf));
         float fall = 1.0 / (1.0 + dd / (1100.0 * 1100.0));
+#ifdef LIGHT_RAYS
+        /* its shadows: the track's solid scenery (light.c, vkr_light_load), a ray a pixel in the beam */
+        if (lb.v[b + 36u].w > 0.5 && cone * fall > 0.02) {
+            rayQueryEXT q;
+            rayQueryInitializeEXT(q, light_tlas[0], gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xff, hp, 2.0, dn, max(dl - 15.0, 3.0));
+            rayQueryProceedEXT(q);
+            if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                cone *= 0.06;
+        }
+#endif
         /* (the ground's facets would show at this low angle: nearly up) */
         float nh = max(dot(on_ground ? normalize(mix(fn, vec3(0.0, 1.0, 0.0), 0.9)) : fn, -dn), 0.0);
         add_l += vec3(1.0, 0.95, 0.82) * 1.1 * cp.w * cone * fall * (0.3 + 0.7 * nh);
@@ -259,6 +275,14 @@ vec3 light_ratio()
         float tl = sqrt(tdd);
         float back = smoothstep(-0.2, 0.5, dot(td / max(tl, 1.0), -cf));
         add_l += vec3(1.0, 0.08, 0.04) * 0.6 * cp.w * back / (1.0 + tdd / (220.0 * 220.0)) * (0.35 + 0.65 * max(dot(on_ground ? vec3(0.0, 1.0, 0.0) : fn, -td / max(tl, 1.0)), 0.0));
+    }
+    /* the map's lamps, baked with their shadows (v[36]: ground map, grid, how strong) */
+    vec4 lmp = lb.v[b + 36u];
+    if (lmp.z > 0.0) {
+        float lg = texture(sampler2D(textures[int(lmp.x)], samplers[smp]), uv).r;
+        float lg0 = textureLod(sampler2D(textures[int(lmp.y)], samplers[smp]), g0uv, 0.0).r;
+        float lg1 = textureLod(sampler2D(textures[int(lmp.y)], samplers[smp]), g1uv, 0.0).r;
+        add_l += vec3(1.0, 0.86, 0.62) * 2.2 * lmp.z * (on_ground ? lg : mix(lg0, lg1, ly - l0));
     }
     /* (against the game's light on smooth ground, not this triangle's flat normal, or each triangle shows) */
     vec3 base = on_ground ? amb + sunc * max(lb.v[b + 5u].y, 0.0) : was;

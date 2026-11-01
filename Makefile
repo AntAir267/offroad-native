@@ -47,6 +47,10 @@ ifneq ($(shell command -v $(GLSLANG) 2>/dev/null),)
 runtime/shaders/%.spv.h: runtime/shaders/%
 	$(GLSLANG) --target-env vulkan1.3 --vn spv_$(subst .,_,$(notdir $<)) -o $@ $<
 endif
+# draw.frag with rays for the car lights' shadows, on the devices that have them
+runtime/shaders/draw.frag.rays.spv.h: runtime/shaders/draw.frag
+	$(GLSLANG) -DLIGHT_RAYS --target-env vulkan1.3 --vn spv_draw_frag_rays -S frag -o $@ $<
+SPV_H += runtime/shaders/draw.frag.rays.spv.h
 build/obj/rt_vk.o: $(SPV_H)
 shaders: $(SPV_H)
 
