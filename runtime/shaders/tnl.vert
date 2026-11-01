@@ -30,6 +30,7 @@ layout(location = 7) flat out vec4 f_dsh;
 layout(location = 8) flat out vec4 f_ssh;
 layout(location = 9) out vec3 v_wpos;
 layout(location = 10) out vec3 v_wnrm;      /* (ray-traced reflections: the world normal) */
+layout(location = 15) out vec3 v_lr;
 layout(location = 14) out vec3 v_lw;            /* (draw.frag's baked lighting: pretransformed draws only) */
 layout(location = 13) flat out uint v_fade; /* an instanced copy's distance fade (draw.frag), else 0 */
 
@@ -89,6 +90,7 @@ vec4 source(bool cv, uint src, vec4 vd, vec4 vs, vec4 mat)
 void main()
 {
     v_lw = vec3(0.0);
+    v_lr = vec3(1.0);
     vec4 p = vec4(a_pos, 1.0);
     vec3 a_n = a_normal;
     float sunk = 1.0;

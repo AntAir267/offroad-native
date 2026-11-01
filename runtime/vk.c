@@ -365,7 +365,7 @@ static int sm_debug;              /* ORR_SMOKE_DEBUG: 1 the volumes alone, over 
                                      front of glass red, behind it blue */
 static int sm_steps;              /* ORR_SMOKE_STEPS: every puff's steps (0: by its size) */
 static int sm_scale;              /* ORR_SMOKE_SCALE: the render target's pixels a march pixel each way (0: 2, 4X: 4) */
-static float sm_budget = 10.0f;   /* ORR_SMOKE_BUDGET: the march's work at most (steps over the smaller image's
+static float sm_budget = 40.0f;   /* ORR_SMOKE_BUDGET: the march's work at most (steps over the smaller image's
                                      area, so many times) before the puffs' steps are made coarser */
 static float sm_density = 3.0f;   /* ORR_SMOKE_DENSITY: scales the puffs' density (Off-Road's are far smaller and fainter than 1NSANE's, for which this was 1) */
 static int sm_log;                /* ORR_SMOKE_LOG=1 */
@@ -3095,8 +3095,8 @@ static int init(void)
     /* (binding 7: the instanced draws' records, shaders/tnl.vert) */
     uint32_t nb = rt_ok ? 8 : 7;
     VkDescriptorSetLayoutBinding b[8] = {
-        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, ntex_slots, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
-        {1, VK_DESCRIPTOR_TYPE_SAMPLER, MAX_SMP, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, ntex_slots, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+        {1, VK_DESCRIPTOR_TYPE_SAMPLER, MAX_SMP, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
         {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
@@ -3749,6 +3749,36 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     VkDeviceAddress vaddr = 0, iaddr = 0;
     uint32_t nidx, first = 0;
     int32_t vbase = 0;
+    /* A car in a puddle: the water's spray comes in three batches, 25 screens' worth of see-through sheets at the peak where 2.5 is
+       usual. At 2560x1440 on the 890M that took a 5 ms frame to 24: Ant's puddle lag [verified: GPU time and coverage, frame by frame].
+       The layers wash out long before that many: about 5 screens a batch (there are three) are drawn, every so many sheets. */
+    static uint16_t thin_idx[65536];
+    if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && idx && ni >= 6 && ni <= 65000) {
+        double sa = 0;
+        for (int t = 0; t + 2 < ni; t += 3) {
+            const SwVertex *A = &v[idx[t]], *B = &v[idx[t + 1]], *C = &v[idx[t + 2]];
+            sa += fabs((double)(B->x - A->x) * (C->y - A->y) - (double)(C->x - A->x) * (B->y - A->y)) * 0.5;
+        }
+        sa /= 1024.0 * 768.0;
+        if (sa > 5.0) {
+            /* (a sheet, clipped by the game, is a fan: its triangles share their first vertex) */
+            int keep = (int)ceil(sa / 5.0), m = 0, sheet = 0;
+            for (int t = 0; t + 2 < ni;) {
+                int e = t + 3;
+                while (e + 2 < ni && idx[e] == idx[t])
+                    e += 3;
+                if (sheet++ % keep == 0) {
+                    memcpy(thin_idx + m, idx + t, (size_t)(e - t) * sizeof *idx);
+                    m += e - t;
+                }
+                t = e;
+            }
+            if (m) {
+                idx = thin_idx;
+                ni = m;
+            }
+        }
+    }
     if (far_bind) {                               /* the far terrain's mesh (vk_far_draw) */
         vbuf = ibuf = far_mesh.buf;
         voff = 0;
@@ -3815,6 +3845,15 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             }
         }
         int hud = flat && w0 < 1.5f && z0 < 0.02f;
+        /* the race's countdown, GET READY, 3, 2, 1, GO, is laid out a little right of the middle [verified: ORR_HUD_LOG, centres
+           525 and 558 of 1024]: centred */
+        float cy0 = 1e9f, cy1 = -1e9f;
+        for (int i = 0; i < nv && hud; i++) {
+            cy0 = v[i].y < cy0 ? v[i].y : cy0;
+            cy1 = v[i].y > cy1 ? v[i].y : cy1;
+        }
+        int countdown = hud && st->tex[0] && st->tex[0]->width == 256 && cy0 >= 130.0f && cy1 <= 300.0f && cy1 - cy0 >= 70.0f &&
+                        x0 >= 150.0f && x1 <= 880.0f;
         li_lit = !flat && li_view.on ? 1 : flat && !hud && li_view.on && li_view.bounce[3] < 1.0f ? 2 : 0;
         if (ssao_on && hud && ssao_world && !ssao_done && z && z->slot >= 0 && ssao_b != 0.0f) {
             ssao_done = 1;
@@ -3834,6 +3873,9 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
                 mid = (vx + vw / 2.0f) * c->sx;
                 half = vw * c->sx / 2.0f;
                 hp = 0.5f * c->sx;
+            } else if (race && countdown) {
+                shift = (W * 0.5f - 0.5f * (x0 + x1)) * c->sy;
+                mid += shift;
             } else if (race && hud) {
                 if (x1 <= 0.35f * W)
                     shift = -c->ox;
@@ -3955,7 +3997,10 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             memcpy(B + 44, li_view.eye, 16);
         }
         if (li_view.block >= 0) {
-            pc.inst[0] = li_lit == 2 ? 5u : li_view.mode;   /* (a flat draw at night, the sky: only darker) */
+            /* (a flat draw at night, the sky: only darker. What is blended over the rest, the water's spray most of all, sheets
+               of it over the whole screen, is lit from its corners, no cost per pixel: per pixel it cost 9 ms a frame at
+               1440p, Ant's puddle lag. It stays under the budget now: draw.vert) */
+            pc.inst[0] = li_lit == 2 ? 5u : r[RS_ALPHABLENDENABLE] && li_view.mode == 1 ? 6u : li_view.mode;
             pc.inst[1] = (uint32_t)li_view.block;
             pc.inst[2] = (uint32_t)li_sun->slot | (uint32_t)li_amb->slot << 16;
             pc.inst[3] = (uint32_t)li_grid->slot | (uint32_t)li_height->slot << 16;
@@ -5824,7 +5869,11 @@ static void sm_pass(GpuImg *g, int pass, PushSmoke *pc, const int *r, const floa
 static int sm_far_first(const void *a, const void *b)
 {
     float x = ((const SmPuff *)a)->dist, y = ((const SmPuff *)b)->dist;
-    return x < y ? 1 : x > y ? -1 : 0;
+    if (x != y)
+        return x < y ? 1 : -1;
+    /* (the same order every frame: two at one distance swapping places shows) */
+    uint32_t i = ((const SmPuff *)a)->m.serial, j = ((const SmPuff *)b)->m.serial;
+    return i < j ? 1 : i > j ? -1 : 0;
 }
 
 /* view-space point v -> render-target pixels (0: behind the camera) */
@@ -5943,8 +5992,14 @@ static float sm_first(SmView *s, int slot, int shadows)
     if (!n)
         return 0.0f;
     double area = (double)w2 * h2;
-    if (!sm_steps && work > sm_budget * area) {     /* (coarser steps for all) */
-        double k = sm_budget * area / work;
+    /* Two cars' clouds overlapping pass the budget: at the old 10 every puff's steps changed from frame to frame and the
+       farthest were dropped, Ant's flicker where particles overlap. The work is small (under 1 ms at 1440p on the 890M), so the budget is
+       4 times higher; and the coarsening comes on slowly and the dropping only at 3 times over. */
+    static double sm_k = 1.0;
+    double k_want = work > sm_budget * area ? sm_budget * area / work : 1.0;
+    sm_k += (k_want - sm_k) * (k_want < sm_k ? 0.15 : 0.03);
+    if (!sm_steps && sm_k < 0.999) {     /* (coarser steps for all) */
+        double k = sm_k;
         work = 0;
         for (int i = 0; i < n; i++) {
             int st = (int)lround(p0[i].steps * k);
@@ -5953,7 +6008,7 @@ static float sm_first(SmView *s, int slot, int shadows)
         }
         /* still too much at 2 steps (the camera in a cloud of them): the farthest go, behind the
            nearer ones */
-        while (n > 1 && work > 2.0 * sm_budget * area) {
+        while (n > 1 && work > 3.0 * sm_budget * area) {
             work -= (double)(p0[0].rect[2] - p0[0].rect[0]) * (p0[0].rect[3] - p0[0].rect[1]) * p0[0].steps;
             p0++;
             n--;

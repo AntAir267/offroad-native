@@ -62,6 +62,7 @@ layout(push_constant) uniform PC {
 } pc;
 layout(std430, set = 0, binding = 6) readonly buffer LightBlock { vec4 v[]; } lb;
 layout(location = 14) in vec3 v_lw;
+layout(location = 15) in vec3 v_lr;
 layout(location = 13) flat in uint v_fade;  /* an instanced copy's distance fade (tnl.vert), as flags.y */
 #ifdef SHADOW_OUTPUTS               /* (compiled twice: vk.c's main view with shadows has these) */
 #include "shadow.glsl"
@@ -503,6 +504,9 @@ void main()
     vec4 tf = argb(pc.misc.z);
     if (pc.light.x == 5u) {
         dif.rgb *= lb.v[pc.light.y + 8u].w;
+        spec.rgb *= lb.v[pc.light.y + 8u].w;
+    } else if (pc.light.x == 6u) {
+        dif.rgb *= v_lr * lb.v[pc.light.y + 8u].w;
         spec.rgb *= lb.v[pc.light.y + 8u].w;
     } else if (pc.light.x != 0u) {
         vec3 lr = light_ratio();

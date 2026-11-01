@@ -149,7 +149,11 @@ Crash at Extreme (Ant): the terrain's polygon records live in the object, 16 byt
 
 Dirt, after Ant: "the tire dirt you had previously was better": ramp 10 ticks to 4, fade-out shorter (game.c). Not compared side by side; his eyes.
 
-Puddle lag: still not reproduced, now with a hit logged: off-screen at 2560x1440 real time, game CPU goes from 4 to 8 ms for a second after a splash, no frame over 20 ms, splash made in 0.01 ms. Real-window runs do not work from here (no swapchain in this shell). So real play now records itself: every frame in ~/.local/share/offroad-native/frame-trace.txt, "slow frame ... (puddle)" lines and surface-write waits in last-run.log. Ant's last real run shows 1019 waits of 4.7 ms for the render thread that off-screen runs do not have (9): the next suspect. Read those files after he plays.
+Puddle lag (found from Ant's frame-trace.txt and last-run.log): render wall 25 ms with render CPU 2 ms, so the GPU. Then reproduced with ORR_VK_STATS=2, GPU time a frame at 2560x1440: 5 ms to 24 in the spray. Earlier checks looked at frame wall time only, off-screen, and missed it. Coverage by triangle area: see-through 2.5 screens normally, 25.8 at the peak, three batches of the game's spray sheets. Baked lighting per pixel on these took about 9 ms of it. Now: see-through draws are lit from their corners (draw.vert, light.x 6), and a batch over 5 screens draws every Nth sheet (fans sharing a first vertex; vk.c). Peak 13.6 ms. The spray is a little thinner. Night not explained: Ant saw none there; the one night run with hits had no slow frames. Real play still records itself: frame-trace.txt, "slow frame" lines in last-run.log.
+
+Particle flicker where cars' clouds overlap (Ant found it): overlap passed the march's budget, so every puff's steps changed frame to frame and the farthest were dropped. Budget 10 to 40, coarsening eases in, dropping only at 3 times over, ties in the sort broken by serial (vk.c). Not seen by me with cars overlapping: needs Ant's word.
+
+Countdown: laid out right of the middle by the game (centres 525 and 558 of 1024); centred in vk.c by its size and place. [verified: frames, 3, 2, 1, GO]
 
 Debug launcher: tools/dev/race.sh, any location, track, car, paint, time and weather through the Time Trial menus, all cars unlocked (ORR_UNLOCK_ALL hooks 0x4784f0, ORR_RACE_LOOK writes 0x5cea00 at 0x4da920). The header lists the numbers. Keys at 50-frame spacing: 30 dropped some.
 
