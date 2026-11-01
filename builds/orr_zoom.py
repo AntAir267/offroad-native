@@ -81,6 +81,8 @@ HOOKS = {
     0x54c0c0: 'terrain_begin',
     # game.c: a race's level being loaded (ECX the race, first argument its settings, 0x5cea00: +0 weather, +4 time of day)
     0x4da920: 'level_load',
+    # light.c: a car's draw (ECX the car: the object, its matrix at +0x24)
+    0x497d50: 'car_draw',
     # light.c: a view of the race starting to draw (0x4daec0 calls it first; ECX the camera)
     0x4f0770: 'terrain_light',
     0x4a54b0: 'cameras_file',

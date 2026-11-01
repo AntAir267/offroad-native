@@ -520,9 +520,9 @@ static int bg_phase = 1;          /* widescreen: still in the frame's leading ba
 /* Baked lighting (light.c, draw.frag's light_ratio): the maps of the race being driven and the view being drawn. Its blocks
    are after the puffs' in sm_buf */
 #define LIGHT_VIEWS 8
-#define LIGHT_BLOCK 12
+#define LIGHT_BLOCK 36              /* 12, then 12 cars x 2 */
 static GpuImg *li_sun, *li_amb, *li_grid, *li_height;
-static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4]; int on, block; uint32_t mode; } li_view;
+static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4], cars[96]; int on, block; uint32_t mode; } li_view;
 static int li_blocks;
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
@@ -3995,6 +3995,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             memcpy(B + 36, li_view.size, 16);
             memcpy(B + 40, li_view.mis, 16);
             memcpy(B + 44, li_view.eye, 16);
+            memcpy(B + 48, li_view.cars, sizeof li_view.cars);
         }
         if (li_view.block >= 0) {
             /* (a flat draw at night, the sky: only darker. What is blended over the rest, the water's spray most of all, sheets
@@ -5760,6 +5761,13 @@ void vkr_light_load(const VkLightMaps *m)
     li_view.mis[2] = m->hrange;
     li_view.mis[3] = m->across ? 1.0f : 0.0f;
     logmsg(LOG_ALWAYS, "baked lighting: %ux%u sun, %ux%u sky, %ux%ux%u grid", m->sw, m->sh, m->aw, m->ah, m->gw, m->gh, m->layers);
+}
+
+void vkr_light_cars(const float *l, int n)
+{
+    n = n > 12 ? 12 : n;
+    memcpy(li_view.cars, l, (size_t)n * 8 * sizeof(float));
+    li_view.eye[3] = (float)n;
 }
 
 void vkr_light_view(const float *inv16, const float *eye, uint32_t mode)

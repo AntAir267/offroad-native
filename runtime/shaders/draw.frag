@@ -184,8 +184,9 @@ vec4 stage(uint c, uint a, vec4 dif, vec4 cur, vec4 tex, vec4 tf, vec4 spec)
    anything above it the grid draped over the terrain. pc.light: x 1 (5 a flat draw, only night's brightness; 2 shows the ratio alone), y the view's block, z sun |
    amb << 16, w grid | height << 16 (texture slots). Block: 0-2 the camera's inverse, 3 its offset, 4 ax bx ay by, 5 sun
    direction, grid step; 6 sun colour; 7 ambient, how deep shadows go; 8 bounce colour, night's brightness; 9 1 / world size x, z, layers,
-   cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye. */
+   cell; 10 sampler, lowest height, height range, grid layers side by side; 11 the eye, how many cars; 12 on, each car two: pos, strength; forward. */
 vec3 li_debug;
+vec3 li_add = vec3(0.0);
 vec3 clamp_light(vec3 c) { return c / max(1.0, max(c.r, max(c.g, c.b))); }
 vec3 light_ratio()
 {
@@ -235,6 +236,33 @@ vec3 light_ratio()
        anything, sky and vis 1, this is exactly what the game drew) */
     vec3 now = amb * mix(1.0, sky, lb.v[b + 7u].w) + sunc * nl * vis + lb.v[b + 8u].rgb * bounce * 3.0;
     li_debug = pc.light.x == 3u ? vec3(fract(w.x / 5120.0), fract(w.z / 5120.0), clamp(abs(dy) / 500.0, 0.0, 1.0)) : vec3(vis, sky, nl);
+    /* car lights (block 12 on: pos, strength; forward): not under night's darkening; what they add goes on after */
+    vec3 add_l = vec3(0.0);
+    int ncar = int(lb.v[b + 11u].w);
+    for (int i = 0; i < ncar; i++) {
+        vec4 cp = lb.v[b + 12u + uint(i) * 2u];
+        vec3 cf = lb.v[b + 13u + uint(i) * 2u].xyz;
+        /* the pair of headlamps as one beam from the front, a little up */
+        vec3 hp = cp.xyz + cf * 170.0 + vec3(0.0, 70.0, 0.0);
+        vec3 d = w - hp;
+        float dd = dot(d, d), dl = sqrt(dd);
+        vec3 dn = d / max(dl, 1.0);
+        float cone = smoothstep(0.80, 0.97, dot(dn, cf));
+        float fall = 1.0 / (1.0 + dd / (1100.0 * 1100.0));
+        /* (the ground's facets would show at this low angle: nearly up) */
+        float nh = max(dot(on_ground ? normalize(mix(fn, vec3(0.0, 1.0, 0.0), 0.9)) : fn, -dn), 0.0);
+        add_l += vec3(1.0, 0.95, 0.82) * 1.1 * cp.w * cone * fall * (0.3 + 0.7 * nh);
+        /* the red behind */
+        vec3 tp = cp.xyz - cf * 200.0 + vec3(0.0, 80.0, 0.0);
+        vec3 td = w - tp;
+        float tdd = dot(td, td);
+        float tl = sqrt(tdd);
+        float back = smoothstep(-0.2, 0.5, dot(td / max(tl, 1.0), -cf));
+        add_l += vec3(1.0, 0.08, 0.04) * 0.6 * cp.w * back / (1.0 + tdd / (220.0 * 220.0)) * (0.35 + 0.65 * max(dot(on_ground ? vec3(0.0, 1.0, 0.0) : fn, -td / max(tl, 1.0)), 0.0));
+    }
+    /* (against the game's light on smooth ground, not this triangle's flat normal, or each triangle shows) */
+    vec3 base = on_ground ? amb + sunc * max(lb.v[b + 5u].y, 0.0) : was;
+    li_add = add_l / max(clamp_light(base), vec3(0.3));
     return clamp(clamp_light(now) / max(clamp_light(was), vec3(0.001)), vec3(0.0), vec3(1.6));
 }
 
@@ -510,7 +538,7 @@ void main()
         spec.rgb *= lb.v[pc.light.y + 8u].w;
     } else if (pc.light.x != 0u) {
         vec3 lr = light_ratio();
-        dif.rgb *= lr * lb.v[pc.light.y + 8u].w;
+        dif.rgb *= lr * lb.v[pc.light.y + 8u].w + li_add;
         spec.rgb *= lb.v[pc.light.y + 8u].w;
         if (pc.light.x >= 2u) {        /* ORR_LIGHT_DEBUG: 2 the ratio alone, 3 where it thinks it is, 4 sun, sky, N.L */
             o_color = vec4(pc.light.x == 2u ? lr * 0.5 : li_debug, 1.0);

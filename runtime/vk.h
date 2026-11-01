@@ -141,6 +141,7 @@ typedef struct {
     uint32_t W, H, sw, sh, aw, ah, gw, gh, layers, across;
     float size[4], sun_dir[4], sun_col[4], amb_col[4], bounce_col[4], hmin, hrange;
 } VkLightMaps;
+void vk_light_cars(const float *l, int n);     /* n x {pos, strength, forward, 0} */
 void vk_light_load(const VkLightMaps *m);
 void vk_light_view(const float *inv16, const float *eye, uint32_t mode);
 void vk_smoke_view_begin(const VkSmokeView *v);

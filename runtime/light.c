@@ -22,6 +22,9 @@ static int want_changed;
 static uint8_t *m_sun, *m_amb, *m_grid;
 static uint16_t *m_height;
 static float light_dir[3];
+#define MAX_CARS 12
+static uint32_t cars[MAX_CARS];
+static int ncars;
 
 /* (case folded, either slash) */
 static void lower(char *o, size_t n, const char *s)
@@ -179,6 +182,7 @@ static void load(void)
         if (f)
             fclose(f);
     }
+    ncars = 0;
     LOG(LOG_ALWAYS, "baked lighting: %s track %s %s: %s", want_env, want_layout, want_look, m.sun ? file : "no maps");
     vk_light_load(&m);
     /* the last ones: the render thread has had its load command before it can reach this point again */
@@ -186,6 +190,19 @@ static void load(void)
     old[0] = m.sun ? m_sun : NULL; old[1] = m.sun ? m_amb : NULL; old[2] = m.sun ? m_grid : NULL; oldh = m.sun ? m_height : NULL;
     m_sun = m_amb = m_grid = NULL;
     m_height = NULL;
+}
+
+/* Car lights: the cars the race has drawn, whose matrices are read at the start of each view (the terrain draws before them).
+   The object's matrix: three rows of four floats, then the position [verified: 0x52e300, 0x49b300]. */
+int light_car_hook(CPU *c)
+{
+    uint32_t o = c->ecx;
+    for (int i = 0; i < ncars; i++)
+        if (cars[i] == o)
+            return 0;
+    if (ncars < MAX_CARS)
+        cars[ncars++] = o;
+    return 0;
 }
 
 static int on = -1;
@@ -245,5 +262,22 @@ int light_terrain_hook(CPU *c)
             (m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m[12]) / W_, (m[1] * l[0] + m[5] * l[1] + m[9] * l[2] + m[13]) / W_, W_);
     }
     vk_light_view(inv, eye, (uint32_t)mode);
+    /* how strong a car's lamps are for the look (ORR_CAR_LIGHTS or the option): night, dusk, rain; not by day */
+    float strength = !strncmp(want_look, "night", 5) ? 1.0f : !strncmp(want_look, "sunset", 6) ? 0.3f : strstr(want_look, "rain") ? 0.3f : 0.0f;
+    if (strcasecmp(option_str("car_lights", "on"), "on") || getenv("ORR_NO_CAR_LIGHTS"))
+        strength = 0.0f;
+    float L[MAX_CARS * 8];
+    int n = 0;
+    if (strength > 0.0f)
+        for (int k2 = 0; k2 < ncars && n < MAX_CARS; k2++, n++) {
+            uint32_t mo = cars[k2] + 0x24;
+            for (int q = 0; q < 3; q++) {
+                L[n * 8 + q] = RF32(mo + 48 + 4 * (uint32_t)q);
+                L[n * 8 + 4 + q] = RF32(mo + 32 + 4 * (uint32_t)q);   /* the car's z: forwards */
+            }
+            L[n * 8 + 3] = strength;
+            L[n * 8 + 7] = 0.0f;
+        }
+    vk_light_cars(L, n);
     return 1;
 }

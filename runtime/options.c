@@ -51,6 +51,7 @@ static const char *const help[][2] = {
     {"widescreen", "widescreen: on (the race's world as wide as the screen, the same height of view; menus and movies stay 4:3), off "
                    "(4:3 as shipped), or a shape such as 16:9. GAME OPTIONS > VIDEO has it too"},
     {"baked_lighting", "baked_lighting: on (the ray-traced shadows and shade) or off (the game's own light)"},
+    {"car_lights", "car_lights: on (headlights and taillights light what is around them at night and dusk, with baked_lighting) or off"},
     {"night", "night: original, dark or darkest (with baked_lighting)"},
     {"streamer_mode", "streamer_mode: on hides the paint jobs with the Confederate flag; each loads the car's plain paint"},
     {"music_level", "music_level, engine_level, effects_level: 0..15, 10 as the game made them (music starts at 7)"},
@@ -76,7 +77,7 @@ static void write_template(const char *path)
 {
     static const char *const def[][2] = {
         {"display", "window"}, {"resolution", "native"}, {"widescreen", "on"}, {"antialiasing", "off"},
-        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
+        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"car_lights", "on"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
         {"frame_limit", "off"}, {"render_thread", "on"}, {"rumble", "on"}, {"controller_deadzone", "6"},
         {NULL, NULL}};
     FILE *f = fopen(path, "w");

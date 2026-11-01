@@ -292,6 +292,8 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    extern int light_car_hook(CPU *c);
+    hook_car_draw = light_car_hook;
     hook_car_available = car_available_hook;
     hook_texture_name = texture_name_hook;
     hook_puddle_hit = puddle_hit_hook;

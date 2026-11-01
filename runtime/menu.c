@@ -56,6 +56,7 @@ static Row rows[] = {
     {"volumetric_dust", "on", "Volumetric Dust", "Real Clouds Of Dust And Exhaust Smoke", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"baked_lighting", "on", "Ray-Traced Lighting", "Real Shadows And Shade", 2, {"Original", "Baked"}, {"off", "on"}, 0, 0, 0},
     {"night", "original", "Night", "How Dark Night Races Are - With Ray-Traced Lighting", 3, {"Original", "Dark", "Darkest"}, {"original", "dark", "darkest"}, 0, 0, 0},
+    {"car_lights", "on", "Car Lights", "Headlights And Taillights Light The Road At Night", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"streamer_mode", "off", "Streamer Mode", "Hides The Confederate Flag Paint Jobs - From The Next Load", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0},
     {"music_level", "7", "Music", "Music Against Everything Else", 16, {0}, {0}, 0, 0, 0, 1},
     {"engine_level", "10", "Engines", "Every Car's Engine, Yours And The Others", 16, {0}, {0}, 0, 0, 0, 1},
@@ -74,7 +75,7 @@ static float fl_y(int i)
             place += k < i;
             total++;
         }
-    return 90.0f + (total > 8 ? 32.0f : 40.0f) * (float)place;
+    return 90.0f + (total > 8 ? 30.0f : 40.0f) * (float)place;
 }
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 

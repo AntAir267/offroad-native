@@ -45,6 +45,7 @@ void vkr_shadow_class(int cls);
 void vkr_shadow_end(void);
 int vkr_shadow_terrain(const float *xyz, uint32_t nv, const uint32_t *idx, uint32_t ni);
 int vkr_shadow_lightmap(const uint8_t *lm);
+void vkr_light_cars(const float *l, int n);
 void vkr_light_load(const VkLightMaps *m);
 void vkr_light_view(const float *inv16, const float *eye, uint32_t mode);
 void vkr_smoke_view_begin(const VkSmokeView *v);
