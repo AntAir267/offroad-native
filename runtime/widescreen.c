@@ -69,6 +69,10 @@ static int viewport_hook(CPU *c)
     if (allowed) {
         union { float f; uint32_t u; } fc = {far_cull};
         W32(cam + 0x250, fc.u);
+        /* the fog runs over (1/rhw - +0x270) * +0x274, 1 / (far - near) from the same far plane [verified: 0x4f1350,
+           readers 0x53fe80, 0x545500, 0x527e60]: it goes out with what is drawn, or the extra distance is all fog */
+        union { float f; uint32_t u; } fs = {1.0f / (far_cull - RF32(cam + 0x24c))};
+        W32(cam + 0x274, fs.u);
     }
     if (widen) {
         W32(p, fx);

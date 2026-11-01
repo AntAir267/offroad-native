@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 #include "runtime.h"
 #include "options.h"
 #include "widescreen.h"
@@ -48,6 +49,40 @@ void game_options(void)
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
 }
 
+/* One tick a frame. The game steps at 60 a second however fast it draws: 0x4db240 reads the time since the last frame
+   from the timer at 0x5d2758 (made at 60 in 0x502630), and +0x30 is the whole ticks in it [verified: decompile]. On a faster
+   screen (Ant's: 157 frames a second, last-run.log) most frames have no tick: the camera and world stand still, and
+   the car and puffs move on the frame after the ones that do, so they shake against the world at 60 Hz [verified: real-time
+   dumps at 150 fps, frame-to-frame differences: the world, then the car and puffs a frame later, then nothing].
+   So a frame waits here for a whole tick since the last. (The timer's own wait, its second argument, spins on Sleep(0) and
+   counts from when it last finished: on a beat of its own it spun a little longer every frame, 14 ms a frame by a lap's end.)
+   Not in test runs (their clock is a count of frames); the ticks a second are what they were, only the frames with none go. */
+static double mono_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1000.0 + (double)t.tv_nsec / 1e6;
+}
+static int frame_timer_hook(CPU *c)
+{
+    extern int deterministic;
+    static int off = -1;
+    if (off < 0)
+        off = getenv("ORR_TICK_FRAMES") && !atoi(getenv("ORR_TICK_FRAMES"));
+    if (deterministic || off || c->ecx != 0x5d2758u)
+        return 0;
+    static double last;
+    double due = last + 1000.0 / 60.0, now = mono_ms();
+    if (now < due - 1.0) {
+        struct timespec ts = {0, (long)((due - 1.0 - now) * 1e6)};
+        nanosleep(&ts, NULL);
+    }
+    while (mono_ms() < due)
+        __builtin_ia32_pause();
+    last = mono_ms();
+    return 0;
+}
+
 static int puff_draw_hook(CPU *c)
 {
     if (!dust_on || !vk_on())
@@ -55,6 +90,11 @@ static int puff_draw_hook(CPU *c)
     uint32_t o = c->ecx, vt = R32(o);
     int exhaust = vt == 0x57abccu;       /* the car's Exhaust objects, 0x491070; the others the wheels' (surface colours) */
     if ((!exhaust && vt != 0x57ad34u) || !R8(o + 0x50))
+        return 0;
+    /* water's spray is hundreds of these at once, screen-filling (285 in a puddle against about 20 on dirt; 24 ms a frame on the
+       890M at 1365 x 768, four times that at its native size: Ant's slowdown in water), and is meant as droplets. It stays
+       the game's sprite. Its colour is fixed: 0.9, 0.9, 0.94 [verified: 0x4a42e0, +0x474 == 1] */
+    if (!exhaust && (R32(o + 0x48) & 0xffffffu) == 0xe6e6f0u)
         return 0;
     extern const D3DState *d3d_last_state(void);
     const D3DState *ds = d3d_last_state();
@@ -141,5 +181,6 @@ void game_init(void)
     if (!widescreen_allowed())
         return;
     hook_puff_draw = puff_draw_hook;
+    hook_frame_timer = frame_timer_hook;
     game_options();
 }

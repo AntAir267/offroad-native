@@ -3200,7 +3200,7 @@ static int init(void)
             sm_budget = (float)atof(e);
         if ((e = getenv("ORR_SMOKE_DENSITY")) && atof(e) > 0)
             sm_density = (float)atof(e);
-        sm_log = getenv("ORR_SMOKE_LOG") != NULL;
+        sm_log = getenv("ORR_SMOKE_LOG") ? atoi(getenv("ORR_SMOKE_LOG")) : 0;
         if ((e = getenv("ORR_SMOKE_GLASS")))
             sm_glass = atoi(e) != 0;
         if ((e = getenv("ORR_SMOKE_SHADOWS")))
@@ -5912,7 +5912,9 @@ static float sm_first(SmView *s, int slot, int shadows)
         memcpy(o + 20, p->srect, 4 * sizeof(float));
         st_sm_steps += p->steps;
     }
-    if (sm_log && nframes % 25 == 0) {             /* ORR_SMOKE_LOG=1: the view and its nearest puffs */
+    if (sm_log == 2)                                /* ORR_SMOKE_LOG=2: a line a frame */
+        logmsg(LOG_ALWAYS, "smoke: frame %lu puffs %d", nframes, n);
+    if (sm_log == 1 && nframes % 25 == 0) {        /* ORR_SMOKE_LOG=1: the view and its nearest puffs */
         logmsg(LOG_ALWAYS, "smoke: frame %lu view %ux%u S %d puffs %d (taken %d) grid %d shadows %d sun %.2f %.2f %.2f colour "
                "%.2f %.2f %.2f ambient %08x fog %.0f %.0f how %.0f work %.2f", nframes, c->w, c->h, S, n, s->n, grid, ns,
                s->v.sun[0], s->v.sun[1], s->v.sun[2], s->v.sun_color[0], s->v.sun_color[1], s->v.sun_color[2], s->ambient,

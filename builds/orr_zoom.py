@@ -66,6 +66,8 @@ HOOKS = {
     # game.c: cameras about to take the far plane from data (0x5d0e78): the draw distance option
     # game.c: a puff's draw, every sprite effect's (ECX the object, first argument the batch)
     0x53c260: 'puff_draw',
+    # game.c: the main loop's frame timer (ECX the timer; the time out, whether to wait for a whole tick)
+    0x56b180: 'frame_timer',
     0x4a54b0: 'cameras_file',
     0x4d94b0: 'race_cameras',
 }

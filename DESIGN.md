@@ -134,8 +134,17 @@ the sky landed on everything once water was in range: Ant's "sky takes depth pri
 now has stencil; sampled depth uses a depth-only view; stencil is dynamic state.
 Far draw distance: 0x4f1350 makes the depth mapping from the game's far (at most 26000), culling uses the raised one on every
 path that sets a camera (widescreen.c, game_far). Extreme: draws 118 to 155 at frame 4800.
-First-puddle slowdown (Ant): not reproduced. In demo driving the splash samples load at about 142 s with no frame over 30 ms; the only
-hitches are level loads (real-time run: 50 ms, 667 ms). The wiped depth and sky pass may have been its cost [guess]. Needs Ant's retest.
+Fog (Ant: "the further elements are still fogged"): the fade is the game's own, on the CPU, into each vertex: fog = ((1/rhw - cam+0x270) * cam+0x274 - d) * slope + height mist, with +0x274 = 1 / (far - near) [verified: 0x4f1350, readers 0x53fe80, 0x545500, 0x527e60; FogDensity d from the .key, 0x507020]. Raising only what culled left all the extra distance in full fog. widescreen.c now makes +0x274 from the raised far. Original, Far and Extreme compared at one frame: the far hillside goes from grey shapes to full colour.
+
+Frames and ticks (Ant: smoke and sun flicker, seen only in real play). The game steps at 60 ticks a second however fast it draws (0x4db240, timer 0x5d2758; +0x30 the whole ticks in a frame). Ant's real runs draw 157 frames a second (last-run.log). Real-time dumps at 150: the world changes every 2.5 frames, the car and puffs one frame after it, then nothing, so they shake against the world at 60 Hz [verified: differences of consecutive dumps]. Every earlier check was a --test run, one tick a frame, which cannot show this: check flicker with a real-time run (no --test, ORR_PACE). game.c frame_timer_hook now holds a frame until a tick is due; test runs are untouched; ORR_TICK_FRAMES=0 for the old way. It must not use the timer's own wait (second argument): that spins on Sleep(0) and counts from when it last finished, and any beat of ours on top spun longer every frame, game CPU 5 to 14 ms over a lap [verified: ORR_PROFILE, 54 % sched_yield]. Now 5 ms flat. Sun: the mechanism is not looked at with the sun in view; needs Ant's word.
+
+Water slowdown (Ant): not reproduced on this machine's 890M at 2560x1440, real time, off-screen with the render thread: through a lap with puddles, no frame over 22 ms, and those are not at the puddles. Ant's runs had the GPU flat out at 157 frames a second, which frames and ticks above takes to 60 [guess: that is the cause]. Puffs: up to 287 taken, nearly all tailpipes and far-off AI cars (dist 24000!): they could be culled if the volume cost shows. White spray (0x4a42e0, +0x474 == 1, colour 0xe6e6f0) stays the game's sprite. The puddle splash itself is another class (0x4a1a40). Needs Ant's retest.
+
+Audio (Ant: music far louder than the car). Not a stack problem: one bug. The game writes volume * master / 127 into every 3D sample [verified: disassembly 0x423d58, 0x424000], 2D samples and streams rely on the driver's master, and mss32.c applied master to all, so effects got master twice (0.55 x 0.55; at the default prefs slider 10 x 7 = 70/127). Mix RMS at full throttle: effects 2200 before, 4000 after; music 5100. Tracks trimmed 3 dB in the stand-in on top. The game's own sliders still work. Not heard by me.
+
+Baked lighting re-bake: researched, not started; see 7d.
+
+T7, with these: fncheck baseline unchanged, lockstep identical over 3,600 frames, a real-time race of 5,200 frames on the RTX 4070 with validation on: no messages.
 
 T7, with the fixes above: fncheck and lockstep unchanged; a race with stencil, Extreme, AO and dust on the RTX 4070, 5200 frames: no validation messages.
 Not done: ray-traced shadows. Findings (static reading of 1nsane-native's shadows.c):
@@ -143,7 +152,11 @@ the RT casters need draws with matrices (vk.c caster requires k), and pretransfo
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
 shadows need world meshes hooked before the game's own transform, code not read yet, and the game's own shadows off.
 
-### 8. Not done yet (next)
+#### 7d. Ray-traced re-bake of the lighting (researched 2026-10-31; nothing built)
+Terrain light is live: colour = (ambient + N.L sun) x shade, shade from a 256-colour table indexed per cell (0x53fe80, 0x53eb50), one cell every 5.12 m, and it looks artist-made (correlation with N.L about 0, rough test). Night sets shade 1, rain 0.6 s + 0.4 (0x4d9c30). Objects are sun-lit per vertex, unshadowed. Sun per look in the .key files (tools/times.py). Track GLBs in the rip hold terrain and placed objects in one space (tracks.py: gradient normals, not the game's). No Blender, Embree or Mitsuba here; a small own ray caster needs no download.
+Routes: (1) loose .lev with new table, no code, one bake over every look and layout, 5 m blobs, no effect at night: not worth it alone. (2) Hook: the vertex holds a pointer to its shade (0x53eb50), so per-look per-vertex floats need only a hook; still 5 m. (3) Lightmap: a second texture over the ground, about 8 texels a cell, 2056 square, 2 MB BC4 a bake, about 280 MB for 26 layouts x 5 suns [estimates]; needs grid UVs through the ground writer 0x564c80 and a shader path; the only one that gives real tree shadows. Multiply against the old shade, or the art's darkening is lost; store a ratio, since the game still applies N.L. Objects need their own per-vertex data by hook, or they glow in baked shadow. AO on by default would double-count.
+
+## 8. Not done yet (next)
 Resolution and frame limit are options.txt only: More Options has room for two more rows. Play through by Ant. Real audio device and real pad, only scripted so far.
 Network play (DirectPlay stand-in has no connections). Frame-time and CPU measurements not taken. The
 Championship and later divisions not played beyond the first race's start.

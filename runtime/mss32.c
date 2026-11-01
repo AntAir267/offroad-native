@@ -258,8 +258,16 @@ static void apply_gain(Obj *o)
         place_3d(o, &g, &bal);
         v *= g;
         p = bal * 0.8f;                 /* (a 3D sound is never fully in one ear) */
+    } else {
+        /* the driver's master is for 2D samples and streams: the game puts it into every 3D sample's own volume,
+           volume * master / 127 [verified: disassembly 0x423d58, 0x424000], so here it would count twice: effects at
+           0.55 x 0.55 against music at 0.55 at the game's settings (Ant: "music is far louder than vehicle audio") */
+        v *= master;
     }
-    v *= master;
+    /* the tracks are mastered far hotter than the engine samples: with the above the race is about music 5100, effects
+       4000 (RMS of the mix, full throttle). 3 dB off puts the car on top; the game's music slider still works under it */
+    if (o->kind == K_STREAM)
+        v *= 0.7f;
     /* equal-power pan, unity in the centre */
     float l = p > 0 ? 1.0f - p : 1.0f, r = p < 0 ? 1.0f + p : 1.0f;
     voice_set_gain(o->voice, v * l, v * r);
