@@ -137,6 +137,7 @@ path that sets a camera (widescreen.c, game_far). Extreme: draws 118 to 155 at f
 First-puddle slowdown (Ant): not reproduced. In demo driving the splash samples load at about 142 s with no frame over 30 ms; the only
 hitches are level loads (real-time run: 50 ms, 667 ms). The wiped depth and sky pass may have been its cost [guess]. Needs Ant's retest.
 
+T7, with the fixes above: fncheck and lockstep unchanged; a race with stencil, Extreme, AO and dust on the RTX 4070, 5200 frames: no validation messages.
 Not done: ray-traced shadows. Findings (static reading of 1nsane-native's shadows.c):
 the RT casters need draws with matrices (vk.c caster requires k), and pretransformed draws have only clipped, visible
 triangles, so positions recovered from x, y, w give no casters off screen: shadows would vanish at the edges. Solid
