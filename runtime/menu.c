@@ -66,6 +66,7 @@ static Row rows[] = {
     {"car_light_shadows", "on", "Car Light Shadows", "Ray-Traced Shadows From Headlights - From The Next Race", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 2},
     {"car_shadows", "on", "Car Shadows", "Cars Cast Shadows From The Sun And Headlights", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 2},
     {"puddles", "reactive", "Puddles", "Reactive: Cars Push The Water Aside", 2, {"Original", "Reactive"}, {"original", "reactive"}, 0, 0, 0, 2},
+    {"fog", "off", "Fog", "Haze In The Distance", 2, {"Off", "Original"}, {"off", "original"}, 0, 0, 0, 2},
     {"map_lights", "on", "Track Lights", "The Lamps On The Tracks Light Them At Night", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 2},
     {"music_level", "7", "Music", "Music Against Everything Else", 16, {0}, {0}, 0, 0, 0, 1},
     {"engine_level", "10", "Engines", "Every Car's Engine, Yours And The Others", 16, {0}, {0}, 0, 0, 0, 1},

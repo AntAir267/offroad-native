@@ -140,8 +140,11 @@ int puddle_draw_hook(CPU *c)
     int known = 0;
     for (int i = 0; i < nseen; i++)
         known |= seen[i] == o;
-    if (!known && nseen < SEEN)
+    if (!known && nseen < SEEN) {
         seen[nseen++] = o;
+        if (getenv("ORR_PUDDLE_LOG"))
+            LOG(LOG_ALWAYS, "puddle %x centre %.0f %.0f half %.0f %.0f level %.1f cell %d %d size %d %d", o, RF32(o + 0x7c), RF32(o + 0x80), RF32(o + 0x84), RF32(o + 0x88), RF32(o + 0x74), R32(o + 0x54), R32(o + 0x58), R32(o + 0x5c), R32(o + 0x60));
+    }
     int s = slot_of(o);
     if (s < 0)
         return 0;

@@ -12,6 +12,8 @@
 #include "options.h"
 #include "widescreen.h"
 #include "funcs.h"
+
+static int fog_off;
 #include "gfx.h"
 #include "vk.h"
 #include "native_land.h"
@@ -47,6 +49,7 @@ void game_options(void)
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
     streamer_on = !strcasecmp(option_str("streamer_mode", "off"), "on");
     stick_camera = !strcasecmp(option_str("camera_stick", "on"), "on");
+    fog_off = !strcasecmp(option_str("fog", "off"), "off");
     {
         const char *fr = option_str("frame_rate", "display");
         extern int host_refresh_hz(void);
@@ -441,6 +444,43 @@ static void turn(uint32_t a, float cy, float sy, float cp, float sp, const float
     for (int i = 0; i < 3; i++)
         W32(a + 4 * (uint32_t)i, o[i].u);
 }
+/* Fog off (Lighting > Fog, default): from the land on, the fog object says the fog starts at 4 x the far plane, so nothing has any; no
+   height mist. Fog object [verified: 0x507020, 0x53eb50]: +0 where it starts, +4 1 / (1 - start), +8 the two's product, +0x24 bit 0 the
+   mist. The sky keeps the real values (its horizon comes from them: without them a black band; time_sky_hook). The land's overlay,
+   all nothing now, is not drawn. */
+static uint32_t fog_kept[4], fog_on_view;
+static void fog_write(int off)
+{
+    uint32_t f = fog_on_view ? R32(fog_on_view + 0x20) : 0;
+    if (!f)
+        return;
+    if (off) {
+        union { float v; uint32_t u; } d = {4.0f}, p = {4.0f * RF32(f + 4)};
+        W32(f, d.u);
+        W32(f + 8, p.u);
+        W32(f + 0x24, fog_kept[3] & ~1u);
+    } else {
+        W32(f, fog_kept[0]);
+        W32(f + 8, fog_kept[2]);
+        W32(f + 0x24, fog_kept[3]);
+    }
+}
+static void fog_view_begin(uint32_t view)
+{
+    uint32_t f = R32(view + 0x20);
+    fog_on_view = fog_off && f ? view : 0;
+    if (fog_on_view) {
+        fog_kept[0] = R32(f);
+        fog_kept[2] = R32(f + 8);
+        fog_kept[3] = R32(f + 0x24);
+    }
+}
+static void fog_view_end(void)
+{
+    fog_write(0);
+    fog_on_view = 0;
+}
+
 static int view_draw_hook(CPU *c)
 {
     {
@@ -452,6 +492,7 @@ static int view_draw_hook(CPU *c)
     static float yaw, pitch;
     static double stick_t;
     uint32_t vcam = R32(R32(c->esp + 4) + 4);
+    fog_view_begin(R32(c->esp + 4));
     if (int_on)
         cam_seen = vcam;        /* (the camera this race draws with: int_snapshot reads it) */
     double st_now = mono_ms();
@@ -483,6 +524,7 @@ static int view_draw_hook(CPU *c)
         if (!draw_only)
             return 0;
         F_004daec0_orig(c);
+        fog_view_end();
         cam_write(vcam, cam_cur);
         int_apply(1);
         return 1;
@@ -533,6 +575,7 @@ static int view_draw_hook(CPU *c)
     W8(cam + 0x1d0, 0);
     W8(cam + 0xcc, 0);
     F_004daec0_orig(c);
+    fog_view_end();
     for (int i = 0; i < 4; i++)
         for (int k = 0; k < 4; k++)
             W32(cam + at[i] + 4 * (uint32_t)k, saved[i * 4 + k]);
@@ -554,10 +597,28 @@ static int view_draw_hook(CPU *c)
         t_sum[id] += mono_ms() - t0;                            \
         return 1;                                               \
     }
-TIMED(time_world_hook, T_WORLD, F_0054ea20_orig)
+/* (the land and what follows: the sky dome before it takes its colours from the fog object) */
+static int time_world_hook(CPU *c)
+{
+    double t0 = mono_ms();
+    fog_write(1);
+    F_0054ea20_orig(c);
+    t_sum[T_WORLD] += mono_ms() - t0;
+    return 1;
+}
 TIMED(time_walk_hook, T_WALK, native_walk_call)
 TIMED(time_land_hook, T_LAND, native_land_call)
-TIMED(time_fog_hook, T_FOG, native_fog_call)
+static int time_fog_hook(CPU *c)
+{
+    if (fog_on_view) {
+        api_return(c, 1, 1);
+        return 1;
+    }
+    double t0 = mono_ms();
+    native_fog_call(c);
+    t_sum[T_FOG] += mono_ms() - t0;
+    return 1;
+}
 /* The clouds fan out to 3 x the far plane, split until no edge is over 3200 units [verified: 0x4ea330, 0x4e8250], so their
    CPU cost goes with the far plane squared, and they end in the fog anyway: drawn for the game's own far plane. */
 static int time_sky_hook(CPU *c)
@@ -566,7 +627,9 @@ static int time_sky_hook(CPU *c)
     uint32_t cam = R32(R32(c->esp + 4) + 4), far_now = R32(cam + 0x250);
     union { float f; uint32_t u; } g = {RF32(cam + 0x250) / far_scale()};
     W32(cam + 0x250, g.u);
+    fog_write(0);
     F_004ea330_orig(c);
+    fog_write(1);
     W32(cam + 0x250, far_now);
     t_sum[T_SKY] += mono_ms() - t0;
     return 1;

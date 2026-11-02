@@ -57,6 +57,7 @@ static const char *const help[][2] = {
     {"camera_stick", "camera_stick: on (the right stick swings the race camera round the car) or off"},
     {"frame_rate", "frame_rate: 60 (one frame a tick, as the game steps), 120, 144, or display (the screen's): frames between ticks with camera and cars blended"},
     {"puddles", "puddles: reactive (water with a height grid: cars push it aside, with baked_lighting) or original"},
+    {"fog", "fog: off (none but the last 5 percent before the far plane) or original"},
     {"map_lights", "map_lights: on (the lamps on the tracks light what is around them at night and dusk, baked with their shadows) or off"},
     {"night", "night: original, dark or darkest (with baked_lighting)"},
     {"streamer_mode", "streamer_mode: on hides the paint jobs with the Confederate flag; each loads the car's plain paint"},
@@ -83,7 +84,7 @@ static void write_template(const char *path)
 {
     static const char *const def[][2] = {
         {"display", "window"}, {"resolution", "native"}, {"widescreen", "on"}, {"antialiasing", "off"},
-        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"car_lights", "on"}, {"puddles", "reactive"}, {"frame_rate", "display"}, {"camera_stick", "on"}, {"car_shadows", "on"}, {"car_light_shadows", "on"}, {"map_lights", "on"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
+        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"car_lights", "on"}, {"fog", "off"}, {"puddles", "reactive"}, {"frame_rate", "display"}, {"camera_stick", "on"}, {"car_shadows", "on"}, {"car_light_shadows", "on"}, {"map_lights", "on"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
         {"frame_limit", "off"}, {"render_thread", "on"}, {"rumble", "on"}, {"controller_deadzone", "6"},
         {NULL, NULL}};
     FILE *f = fopen(path, "w");

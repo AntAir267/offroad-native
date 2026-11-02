@@ -3980,10 +3980,11 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             memcpy(B + 144, li_view.lamp, 16);
         }
         if (li_view.block >= 0) {
-            /* (a flat draw at night, the sky: only darker. What is blended over the rest, the water's spray most of all, sheets
-               of it over the whole screen, is lit from its corners, no cost per pixel: per pixel it cost 9 ms a frame at
-               1440p, Ant's puddle lag. It stays under the budget now: draw.vert) */
-            pc.inst[0] = li_lit == 2 ? 5u : r[RS_ALPHABLENDENABLE] && li_view.mode == 1 ? 6u : li_view.mode;
+            /* (a flat draw at night, the sky: only darker. The small textures blended over the rest, the water's spray most of all,
+               sheets of it over the whole screen, are lit from their corners, no cost per pixel: per pixel it cost 9 ms a frame at
+               1440p. Not the terrain's blended passes: lit by their 5 m corners next to pixels lit finely, every such cell
+               showed as a block, Ant's blocky ground) */
+            pc.inst[0] = li_lit == 2 ? 5u : r[RS_ALPHABLENDENABLE] && li_view.mode == 1 && st->tex[0] && st->tex[0]->width <= 64 ? 6u : li_view.mode;
             pc.inst[1] = (uint32_t)li_view.block;
             pc.inst[2] = (uint32_t)li_sun->slot | (uint32_t)li_amb->slot << 16;
             pc.inst[3] = (uint32_t)li_grid->slot | (uint32_t)li_height->slot << 16;
