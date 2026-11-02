@@ -70,6 +70,7 @@ HOOKS = {
     0x56b180: 'frame_timer',
     # puddle.c: a puddle's draw, its second pass
     0x4a0180: 'puddle_draw',
+    0x4a1710: 'puddle_init',
     0x4a1360: 'puddle_sky',
     # game.c: a splash's draw (ECX the object, first argument the view); the clouds (first argument the view)
     0x4a2630: 'splash_draw',

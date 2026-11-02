@@ -1371,8 +1371,11 @@ void native_walk_call(CPU *c)
         F_0054f230_orig(c);
         return;
     }
-    if (force_water)
-        M32(R32(c->esp + 4) + 0x38) |= 2;
+    {
+        extern int water_enabled(void);
+        if (force_water || water_enabled())
+            M32(R32(c->esp + 4) + 0x38) |= 2;
+    }
     if (ab_every > 0 && ab_this_view()) {
         ab_run(c, 0, "walk", c->ecx + 0x1194, R32(c->esp + 4), F_0054f230_orig, native_walk);
         return;

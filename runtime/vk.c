@@ -60,9 +60,9 @@
 #include "shaders/taa.frag.spv.h"
 #include "shaders/taau.frag.spv.h"
 #include "shaders/draw.frag.rays.spv.h"
-#include "shaders/puddle.frag.spv.h"
-#include "shaders/puddle.vert.spv.h"
-#include "shaders/puddle_sim.frag.spv.h"
+#include "shaders/water.frag.spv.h"
+#include "shaders/water.vert.spv.h"
+#include "shaders/water_sim.frag.spv.h"
 #include "shaders/smoke.vert.spv.h"
 #include "shaders/smoke.frag.spv.h"
 #include "shaders/smoke.frag.motion.spv.h"
@@ -362,6 +362,7 @@ static struct { int ok, slot; GpuImg *c; unsigned long frame; } sm_rt;
 #define SMOKE_HDR 16              /* a view's block (shaders/smoke.glsl): its own vec4s, */
 #define SMOKE_PV 6                /* ... a puff's */
 #define SMOKE_BLOCK (SMOKE_HDR + SMOKE_PV * SMOKE_MAX)
+#define WATER_BLOCK 88               /* 12 cars x 6, 8 puddles x 2 (water.c) */
 static DBuf sm_buf;               /* the frames' views' blocks (binding 6) */
 static int sm_slots_used;         /* this frame's blocks */
 static int sm_debug;              /* ORR_SMOKE_DEBUG: 1 the volumes alone, over grey; 3 the puffs' rectangles;
@@ -528,7 +529,6 @@ static int bg_phase = 1;          /* widescreen: still in the frame's leading ba
 static GpuImg *li_sun, *li_amb, *li_grid, *li_height, *li_lamp, *li_lampg;
 static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4], cars[96], lamp[4]; int on, block; uint32_t mode; } li_view;
 static int li_blocks;
-static int pud_copied;
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
 /* Render resolution (options.txt "resolution"): "original" draws at the program's display
@@ -2443,7 +2443,7 @@ static GpuImg *aux_img(GpuImg **a, GpuImg **spare, uint32_t w, uint32_t h, VkFor
         img_discard(*spare);
     *spare = *a;
     *a = img_new(K_AUX, w, h, 1, f, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+                                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     return *a;
 }
 
@@ -3196,7 +3196,7 @@ static int init(void)
         vkUpdateDescriptorSets(dev, 1, &w, 0, NULL);
     }
     {   /* the volumetric smoke's puffs: the frames' views' blocks, host-written */
-        sm_buf = dbuf_new(((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (VkDeviceSize)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (VkDeviceSize)FRAMES * 24) * 16,
+        sm_buf = dbuf_new(((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (VkDeviceSize)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (VkDeviceSize)FRAMES * WATER_BLOCK) * 16,
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1);
         memset(sm_buf.map, 0, (size_t)sm_buf.size);
         VkDescriptorBufferInfo bufi = {sm_buf.buf, 0, sm_buf.size};
@@ -7923,7 +7923,6 @@ void vkr_present(Surface *src, const int *rect)
     wide_world = 0;
     li_view.on = 0;
     li_blocks = 0;
-    pud_copied = 0;
     ssao_done = 0;
     ssao_world = 0;
     if (hp_flip && nframes % (unsigned long)hp_flip == 0)
@@ -8001,17 +8000,24 @@ void vkr_present(Surface *src, const int *rect)
     }
 }
 
-/* Reactive puddles: see runtime/puddle.c. Four grids, each two images (this step, last step) and the ground. */
-#define PUD_GRID 128
-#define PUD_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
-static struct PudSlot { GpuImg *g[2], *spare[2], *ground, *gspare; int cur, have_ground; float rect[4], level; } pud[VK_PUDDLES];
-static GpuImg *pud_copy, *pud_copy_spare;
-static VkShaderModule sm_pudsim, sm_pudv, sm_pudf;
-typedef struct { uint32_t a[4]; float rect[4], lev[4], ht[4]; } PushPudSim;
-typedef struct { float clip[16]; uint32_t a[4]; float rect[4], lev[4], scr[4]; } PushPud;
-_Static_assert(sizeof(PushPud) <= sizeof(PushDraw), "push constant range");
+/* Water: see runtime/water.c. A the depth, ground, rest level, wet and foam (two images, this step, last step); V the flow (two); the
+   scene's distance at half size, for the reflections; a copy of the picture. */
+#define WAT_A VK_FORMAT_R32G32B32A32_SFLOAT
+#define WAT_V VK_FORMAT_R32G32_SFLOAT
+static GpuImg *wa[2], *wa_spare[2], *wv[2], *wv_spare[2], *wat_copy, *wat_copy_spare, *wat_dist, *wat_dist_spare;
+static int wat_cur, wat_have, wat_n;
+static VkWaterStep wat_last;
+static VkShaderModule sm_watsim, sm_watv, sm_watf;
+static VkQueryPool wat_q;
+static int wat_q_used[FRAMES];
+static double wat_ms[3];
+static unsigned wat_ms_n[3];
+static int wat_log = -1;
+typedef struct { int32_t a[4], r[4], p[4], n[4]; float ht[4], m[4]; } PushWatSim;
+typedef struct { float clip[16]; int32_t a[4], r[4]; float c[4]; int32_t d[4]; } PushWat;
+_Static_assert(sizeof(PushWat) <= sizeof(PushDraw) && sizeof(PushWatSim) <= sizeof(PushDraw), "push constant range");
 
-static VkPipeline pud_pipeline(int kind, VkFormat color, VkFormat depth)
+static VkPipeline wat_pipeline(int kind, VkFormat color, VkFormat depth)
 {
     uint32_t key = 0x20000000u | (uint32_t)kind;
     for (int i = 0; i < npipes; i++)
@@ -8019,104 +8025,252 @@ static VkPipeline pud_pipeline(int kind, VkFormat color, VkFormat depth)
             return pipes[i].p;
     if (npipes == COUNT(pipes))
         fatal("Vulkan: too many pipelines");
-    if (!sm_pudsim) {
-        sm_pudsim = shader(spv_puddle_sim_frag, sizeof spv_puddle_sim_frag);
-        sm_pudv = shader(spv_puddle_vert, sizeof spv_puddle_vert);
-        sm_pudf = shader(spv_puddle_frag, sizeof spv_puddle_frag);
+    if (!sm_watsim) {
+        sm_watsim = shader(spv_water_sim_frag, sizeof spv_water_sim_frag);
+        sm_watv = shader(spv_water_vert, sizeof spv_water_vert);
+        sm_watf = shader(spv_water_frag, sizeof spv_water_frag);
     }
     Pipe *p = &pipes[npipes++];
     p->key = key;
     p->depth = depth;
     p->color = color;
     if (kind == 0)
-        p->p = pipeline_create(sm_pv, sm_pudsim, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 0, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, color, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
+        p->p = pipeline_create(sm_pv, sm_watsim, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 0, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, color, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
     else
-        p->p = pipeline_create(sm_pudv, sm_pudf, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 1, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, color, depth, 0, 0, 0, 0);
+        p->p = pipeline_create(sm_watv, sm_watf, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 1, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, color, depth, 0, 0, 0, 0);
     return p->p;
 }
 
-static void pud_sim_pass(GpuImg *t, PushPudSim *pc)
+/* ORR_WATER_LOG: what the simulation and the surface cost, from timestamps (pairs: 0 simulation, 1 surface, 2 the copies; the first of each in a frame) */
+static void wat_stamp_read(void)
+{
+    static int last_fi = -1;
+    if (wat_log < 0)
+        wat_log = getenv("ORR_WATER_LOG") ? 1 : 0;
+    if (!wat_log || !st_tick_ns || fi == last_fi)
+        return;
+    last_fi = fi;
+    if (!wat_q) {
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 6 * FRAMES};
+        vkCreateQueryPool(dev, &qi, NULL, &wat_q);
+        vkCmdResetQueryPool(cb, wat_q, 0, 6 * FRAMES);
+        memset(wat_q_used, 0, sizeof wat_q_used);
+    }
+    for (int k = 0; k < 3; k++) {
+        uint64_t t[2];
+        if ((wat_q_used[fi] >> (k * 2) & 3) == 3 &&
+            vkGetQueryPoolResults(dev, wat_q, (uint32_t)(fi * 6 + k * 2), 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            wat_ms[k] += (double)(t[1] - t[0]) * st_tick_ns / 1e6;
+            wat_ms_n[k]++;
+        }
+    }
+    vkCmdResetQueryPool(cb, wat_q, (uint32_t)(fi * 6), 6);
+    wat_q_used[fi] = 0;
+}
+static void wat_stamp(int pair, int end)
+{
+    if (!wat_log || !wat_q || !st_tick_ns || (wat_q_used[fi] >> (pair * 2 + end) & 1))
+        return;
+    vkCmdWriteTimestamp(cb, end ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, wat_q, (uint32_t)(fi * 6 + pair * 2 + end));
+    wat_q_used[fi] |= 1 << (pair * 2 + end);
+}
+
+/* the simulated area, cut where it wraps round the image: up to 4 rectangles */
+static int wat_rects(const int *r, VkRect2D *out)
+{
+    int n = 0, N = wat_n;
+    int x0 = r[0] & (N - 1), z0 = r[1] & (N - 1);
+    int xa[2][2] = {{x0, x0 + r[2] > N ? N - x0 : r[2]}, {0, x0 + r[2] > N ? x0 + r[2] - N : 0}};
+    int za[2][2] = {{z0, z0 + r[3] > N ? N - z0 : r[3]}, {0, z0 + r[3] > N ? z0 + r[3] - N : 0}};
+    for (int i = 0; i < 2; i++)
+        for (int k = 0; k < 2; k++)
+            if (xa[i][1] > 0 && za[k][1] > 0) {
+                out[n].offset.x = xa[i][0];
+                out[n].offset.y = za[k][0];
+                out[n].extent.width = (uint32_t)xa[i][1];
+                out[n].extent.height = (uint32_t)za[k][1];
+                n++;
+            }
+    return n;
+}
+
+static void wat_sim_pass(GpuImg *t, PushWatSim *pc, const int *rect)
 {
     begin_rendering(t, NULL);
-    bind_pipeline(pud_pipeline(0, t->format, VK_FORMAT_UNDEFINED));
+    t->gpu_newer = 1;
+    bind_pipeline(wat_pipeline(0, t->format, VK_FORMAT_UNDEFINED));
     VkViewport vp = {0, 0, (float)t->w, (float)t->h, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &vp);
-    VkRect2D r = {{0, 0}, {t->w, t->h}};
-    vkCmdSetScissor(cb, 0, 1, &r);
     vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof *pc, pc);
-    vkCmdDraw(cb, 3, 1, 0, 0);
+    VkRect2D rs[4];
+    int n = wat_rects(rect, rs);
+    for (int i = 0; i < n; i++) {
+        vkCmdSetScissor(cb, 0, 1, &rs[i]);
+        vkCmdDraw(cb, 3, 1, 0, 0);
+    }
     end_rendering();
 }
 
-/* A view's start: a step of each grid when a tick has passed. Slots: rect x0, z0, sx, sz, level (level below -1e8: not in use);
-   fresh: its place is new. cars: n x {pos, unused; forward, speed}. */
-void vkr_puddle_step(const VkPuddleSlot *s, int ns, const float *cars, int ncars)
+/* A step of the simulation, when a tick has passed (the cars and puddles in the block). */
+void vkr_water_step(const VkWaterStep *s)
 {
     if (!li_height)
         return;
     frame_begin();
-    ncars = ncars > 12 ? 12 : ncars;
-    uint32_t base = (uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (uint32_t)fi * 24;
-    memcpy((float *)sm_buf.map + (size_t)base * 4, cars, (size_t)ncars * 8 * sizeof(float));
     end_rendering();
-    float smp = li_view.mis[0];
-    for (int i = 0; i < ns && i < VK_PUDDLES; i++) {
-        struct PudSlot *p = &pud[i];
-        if (s[i].level < -1e8f)
-            continue;
-        aux_img(&p->g[0], &p->spare[0], PUD_GRID, PUD_GRID, PUD_FORMAT);
-        aux_img(&p->g[1], &p->spare[1], PUD_GRID, PUD_GRID, PUD_FORMAT);
-        aux_img(&p->ground, &p->gspare, PUD_GRID, PUD_GRID, VK_FORMAT_R32_SFLOAT);
-        memcpy(p->rect, s[i].rect, sizeof p->rect);
-        p->level = s[i].level;
-        PushPudSim pc = {{0, 0, 0, base}, {s[i].rect[0], s[i].rect[1], s[i].rect[2], s[i].rect[3]},
-                         {s[i].level, 0, (float)ncars, smp}, {li_view.mis[1], li_view.mis[2], li_view.size[3], (float)li_height->slot}};
-        if (s[i].fresh || !p->have_ground) {
-            barrier(li_height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            pud_sim_pass(p->ground, &pc);
-            barrier(p->ground, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            VkClearColorValue zero = {{0}};
-            VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            for (int k = 0; k < 2; k++) {
-                barrier(p->g[k], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                vkCmdClearColorImage(cb, p->g[k]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
-                barrier(p->g[k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            }
-            p->have_ground = 1;
+    wat_stamp_read();
+    wat_stamp(0, 0);
+    uint32_t base = (uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (uint32_t)fi * WATER_BLOCK;
+    float *B = (float *)sm_buf.map + (size_t)base * 4;
+    memcpy(B, s->cars, (size_t)s->ncars * 6 * 4 * sizeof(float));
+    memcpy(B + 72 * 4, s->puddles, (size_t)s->npuddles * 2 * 4 * sizeof(float));
+    int N = s->image;
+    if (wat_n != N) {
+        wat_n = N;
+        wat_have = 0;
+    }
+    for (int k = 0; k < 2; k++) {
+        aux_img(&wa[k], &wa_spare[k], (uint32_t)N, (uint32_t)N, WAT_A);
+        aux_img(&wv[k], &wv_spare[k], (uint32_t)N, (uint32_t)N, WAT_V);
+    }
+    if (!wat_have) {
+        VkClearColorValue zero = {{0}};
+        VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        for (int k = 0; k < 4; k++) {
+            GpuImg *g = k < 2 ? wa[k] : wv[k - 2];
+            barrier(g, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cb, g->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
         }
-        barrier(p->g[p->cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        pc.a[0] = (uint32_t)p->g[p->cur]->slot;
-        pc.a[1] = (uint32_t)p->ground->slot;
-        pc.a[2] = 1;
-        pud_sim_pass(p->g[1 - p->cur], &pc);
-        p->cur = 1 - p->cur;
-        barrier(p->g[p->cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    barrier(li_height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    PushWatSim pc;
+    memset(&pc, 0, sizeof pc);
+    memcpy(pc.r, s->rect, sizeof pc.r);
+    memcpy(pc.p, wat_have ? s->prev : (const int[4]){0, 0, 0, 0}, sizeof pc.p);
+    pc.n[0] = N;
+    pc.n[1] = s->ncars;
+    pc.n[2] = s->npuddles;
+    pc.n[3] = (int)li_view.mis[0];
+    pc.a[3] = (int)base;
+    pc.ht[0] = li_view.mis[1];
+    pc.ht[1] = li_view.mis[2];
+    pc.ht[2] = li_view.size[3];
+    pc.ht[3] = (float)li_height->slot;
+    pc.m[0] = s->ticks;
+    pc.m[1] = s->lake ? 1.0f : 0.0f;
+    pc.m[2] = 0;
+    pc.m[3] = s->recover ? 1.0f : 0.0f;
+    for (int st = 0; st < 2; st++)
+        barrier(wa[st], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL), barrier(wv[st], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    /* the flow */
+    pc.a[0] = (int)wa[wat_cur]->slot;
+    pc.a[1] = (int)wv[wat_cur]->slot;
+    pc.a[2] = 0;
+    wat_sim_pass(wv[1 - wat_cur], &pc, s->rect);
+    barrier(wv[1 - wat_cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    /* the depth */
+    pc.a[1] = (int)wv[1 - wat_cur]->slot;
+    pc.a[2] = 1;
+    wat_sim_pass(wa[1 - wat_cur], &pc, s->rect);
+    barrier(wa[1 - wat_cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    wat_cur = 1 - wat_cur;
+    wat_have = 1;
+    wat_last = *s;
+    wat_stamp(0, 1);
+    /* ORR_WATER_LOG: the state read back now and then: the volume, to see it is kept, and anything gone wrong */
+    if (wat_log > 0) {
+        static DBuf rb;
+        static int rb_wait, rb_n, rb_rect[4];
+        if (rb_wait > 0 && --rb_wait == 0) {
+            const float *A = (const float *)rb.map;
+            double vol = 0, hmax = 0;
+            int wetc = 0, bad = 0, rested = 0;
+            float g0 = 0, r0 = 0;
+            for (int j = 0; j < rb_rect[3]; j++)
+                for (int i = 0; i < rb_rect[2]; i++) {
+                    const float *c0 = A + (size_t)(((rb_rect[1] + j) & (N - 1)) * N + ((rb_rect[0] + i) & (N - 1))) * 4;
+                    if (c0[0] != c0[0] || c0[1] != c0[1] || c0[3] != c0[3])
+                        bad++;
+                    else {
+                        vol += c0[0];
+                        hmax = c0[0] > hmax ? c0[0] : hmax;
+                        wetc += c0[0] > 0.05f;
+                        rested += c0[2] > -1e8f;
+                        if (j == rb_rect[3] / 2 && i == rb_rect[2] / 2) {
+                            g0 = c0[1];
+                            r0 = c0[2];
+                        }
+                    }
+                }
+            LOG(LOG_ALWAYS, "water: state: volume %.1f m3, deepest %.1f cm, wet cells %d, with a rest level %d, broken %d; middle ground %.1f rest %.1f", vol * 25.0 * 25.0 / 1e6, hmax, wetc, rested, bad, g0, r0);
+        }
+        if (!rb_wait && ++rb_n % 120 == 0) {
+            if (!rb.buf)
+                rb = dbuf_new((VkDeviceSize)N * N * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 1);
+            GpuImg *g = wa[wat_cur];
+            barrier(g, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy bc = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {(uint32_t)N, (uint32_t)N, 1}};
+            vkCmdCopyImageToBuffer(cb, g->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb.buf, 1, &bc);
+            barrier(g, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            memcpy(rb_rect, s->rect, sizeof rb_rect);
+            rb_wait = FRAMES + 2;
+        }
+    }
+    if (wat_log > 0 && wat_ms_n[0] >= 300) {
+        LOG(LOG_ALWAYS, "water: simulation %.3f ms a step (%d x %d cells, %d cars), surface %.3f ms a view, copies %.3f ms", wat_ms[0] / wat_ms_n[0], s->rect[2], s->rect[3], s->ncars,
+            wat_ms_n[1] ? wat_ms[1] / wat_ms_n[1] : 0.0, wat_ms_n[2] ? wat_ms[2] / wat_ms_n[2] : 0.0);
+        memset(wat_ms, 0, sizeof wat_ms);
+        memset(wat_ms_n, 0, sizeof wat_ms_n);
     }
 }
 
-/* In the view: a puddle's surface and spray. The picture copied once a frame, for the ground seen through the water. */
-void vkr_puddle_draw(Surface *rt, Surface *zb, int slot, const float *world_to_shot, float time)
+/* In the view, after the world: the picture and the scene's distances copied, then the surface and the spray. */
+void vkr_water_draw(Surface *rt, Surface *zb, const float *world_to_shot, float between, float time)
 {
-    struct PudSlot *p = &pud[slot];
-    if (!p->have_ground || !p->g[p->cur] || !li_sun || li_view.block < 0)
+    if (!wat_have || !li_sun || li_view.block < 0 || !wat_last.rect[2])
         return;
     GpuImg *c = rt_sync(rt), *z = depth_sync(zb, c);
     if (!c || !z)
         return;
     end_rendering();
-    aux_img(&pud_copy, &pud_copy_spare, c->w, c->h, c->format);
-    if (!pud_copied) {
-        pud_copied = 1;
-        barrier(c, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        barrier(pud_copy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                          .extent = {c->w, c->h, 1}};
-        vkCmdCopyImage(cb, c->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pud_copy->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
-        barrier(pud_copy, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    wat_stamp_read();
+    wat_stamp(2, 0);
+    aux_img(&wat_copy, &wat_copy_spare, c->w, c->h, c->format);
+    aux_img(&wat_dist, &wat_dist_spare, (c->w + 1) / 2, (c->h + 1) / 2, VK_FORMAT_R32_SFLOAT);
+    barrier(c, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    barrier(wat_copy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                      .extent = {c->w, c->h, 1}};
+    vkCmdCopyImage(cb, c->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, wat_copy->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    barrier(wat_copy, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    {
+        barrier(z, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        PushWatSim ps;
+        memset(&ps, 0, sizeof ps);
+        ps.a[2] = 2;
+        ps.r[0] = (int)wat_dist->w;
+        ps.r[1] = (int)wat_dist->h;
+        ps.n[3] = (int)li_view.mis[0];
+        ps.m[0] = ssao_a;
+        ps.m[1] = ssao_b;
+        ps.m[2] = (float)z->slot;
+        begin_rendering(wat_dist, NULL);
+        wat_dist->gpu_newer = 1;
+        bind_pipeline(wat_pipeline(0, wat_dist->format, VK_FORMAT_UNDEFINED));
+        VkViewport v2 = {0, 0, (float)wat_dist->w, (float)wat_dist->h, 0, 1};
+        vkCmdSetViewport(cb, 0, 1, &v2);
+        VkRect2D r2 = {{0, 0}, {wat_dist->w, wat_dist->h}};
+        vkCmdSetScissor(cb, 0, 1, &r2);
+        vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof ps, &ps);
+        vkCmdDraw(cb, 3, 1, 0, 0);
+        end_rendering();
+        barrier(wat_dist, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
+    wat_stamp(2, 1);
+    wat_stamp(1, 0);
     begin_rendering(c, z);
     c->gpu_newer = 1;
-    bind_pipeline(pud_pipeline(1, c->format, z->format));
+    bind_pipeline(wat_pipeline(1, c->format, z->format));
     VkViewport vp = {0, 0, (float)c->w, (float)c->h, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &vp);
     VkRect2D sc = {{0, 0}, {c->w, c->h}};
@@ -8125,29 +8279,37 @@ void vkr_puddle_draw(Surface *rt, Surface *zb, int slot, const float *world_to_s
     float x0 = ui_x(c, 0.5f), x1 = ui_x(c, 1.5f), PW = (float)c->w, H = (float)c->lh;
     float ax = 2.0f * (x1 - x0) / PW, bx = 2.0f * (x0 - 0.5f * (x1 - x0)) / PW - 1.0f, ay = 2.0f / H, by = 1.0f / H - 1.0f;
     const float *m = world_to_shot;     /* rows: x w, y w, z w, w; each 4 */
-    PushPud pc;
+    PushWat pc;
     for (int k = 0; k < 4; k++) {       /* (column major) */
         pc.clip[k * 4 + 0] = ax * m[k] + bx * m[12 + k];
         pc.clip[k * 4 + 1] = ay * m[4 + k] + by * m[12 + k];
         pc.clip[k * 4 + 2] = m[8 + k];
         pc.clip[k * 4 + 3] = m[12 + k];
     }
-    pc.a[0] = (uint32_t)p->g[p->cur]->slot;
-    pc.a[1] = (uint32_t)p->ground->slot;
-    pc.a[2] = 0;
-    pc.a[3] = (uint32_t)li_view.block;
-    memcpy(pc.rect, p->rect, sizeof pc.rect);
-    pc.lev[0] = p->level;
-    pc.lev[1] = time;
-    pc.lev[2] = li_view.mis[0];
-    pc.lev[3] = getenv("ORR_PUDDLE_DEBUG") ? 1.0f : 0.0f;
-    pc.scr[0] = 1.0f / (float)c->w;
-    pc.scr[1] = 1.0f / (float)c->h;
-    pc.scr[2] = (float)pud_copy->slot;
-    pc.scr[3] = 0;
+    pc.a[0] = (int)wa[wat_cur]->slot;
+    pc.a[1] = (int)wa[1 - wat_cur]->slot;
+    pc.a[2] = (int)wv[wat_cur]->slot;
+    pc.a[3] = li_view.block;
+    memcpy(pc.r, wat_last.rect, sizeof pc.r);
+    pc.c[0] = between;
+    pc.c[1] = time;
+    pc.c[2] = li_view.mis[0];
+    pc.c[3] = (float)wat_copy->slot;
+    pc.d[0] = wat_n;
+    static int wat_debug = -1;
+    if (wat_debug < 0)
+        wat_debug = getenv("ORR_WATER_DEBUG") ? 2 : 0;
+    pc.d[1] = wat_debug;
+    pc.d[2] = (int)wat_dist->slot;
+    pc.d[3] = (int)((uint32_t)li_sun->slot | (uint32_t)li_amb->slot << 16);
     vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
-    vkCmdDraw(cb, 48 * 48 * 6, 1, 0, 0);
-    pc.a[2] = 1;
+    uint32_t qx = (uint32_t)wat_last.rect[2] / 2, qz = (uint32_t)wat_last.rect[3] / 2;
+    vkCmdDraw(cb, qx * qz * 6, 1, 0, 0);
+    pc.d[1] = 1;
+    pc.a[1] = (int)((uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (uint32_t)fi * WATER_BLOCK);
+    pc.d[2] = wat_last.ncars;
     vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
-    vkCmdDraw(cb, 1500 * 6, 1, 0, 0);
+    vkCmdDraw(cb, 3000 * 6, 1, 0, 0);
+    end_rendering();
+    wat_stamp(1, 1);
 }

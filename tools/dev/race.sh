@@ -22,6 +22,8 @@ for ((i=1;i<tr;i++)); do key RIGHT; done
 key DOWN; K="$K,$f:ENTER"; f=$((f+1000))
 start=$f
 K="$K,$start:UP*${HOLD:-$n}"
+# STEER="<frames from the start>:LEFT*<frames>,..." more keys, while it runs
+for k in ${STEER//,/ }; do K="$K,$((start+${k%%:*})):${k#*:}"; done
 rm -rf "$out.user"
 test=--test; [ -n "$REAL" ] && test=
 ORR_UNLOCK_ALL=1 ORR_RACE_LOOK=$look ORR_WIDESCREEN=1 ORR_GPU_OFFSCREEN=1 ORR_DUMP_FRAMES=$out ORR_DUMP_EVERY=$ev ORR_DUMP_FROM=$start ORR_KEYS="$K" \

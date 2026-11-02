@@ -146,10 +146,16 @@ typedef struct {
     uint32_t W, H, sw, sh, aw, ah, gw, gh, layers, across;
     float size[4], sun_dir[4], sun_col[4], amb_col[4], bounce_col[4], hmin, hrange;
 } VkLightMaps;
-#define VK_PUDDLES 4
-typedef struct { float rect[4], level; int fresh; } VkPuddleSlot;
-void vk_puddle_step(const VkPuddleSlot *s, int ns, const float *cars, int ncars);
-void vk_puddle_draw(struct Surface *rt, struct Surface *zb, int slot, const float *rows, float time);
+typedef struct {
+    int image;                 /* the grid's side, a power of two */
+    int rect[4], prev[4];      /* simulated cells: x0, z0, nx, nz, world cell numbers (25 units each); a step ago */
+    int lake, recover, ncars, npuddles;
+    float ticks;
+    float cars[12 * 6 * 4];    /* each pos, half reach; velocity; 4 wheels xyz r */
+    float puddles[8 * 2 * 4];  /* each cx, cz, hx, hz; level */
+} VkWaterStep;
+void vk_water_step(const VkWaterStep *s);
+void vk_water_draw(struct Surface *rt, struct Surface *zb, const float *rows, float between, float time);
 void vk_light_cars(const float *l, int n);     /* n x {pos, strength, forward, 0} */
 void vk_light_load(const VkLightMaps *m);
 void vk_light_view(const float *inv16, const float *eye, uint32_t mode);

@@ -49,15 +49,15 @@ void game_options(void)
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
     streamer_on = !strcasecmp(option_str("streamer_mode", "off"), "on");
     stick_camera = !strcasecmp(option_str("camera_stick", "on"), "on");
-    fog_off = !strcasecmp(option_str("fog", "off"), "off");
+    fog_off = widescreen_allowed() && !strcasecmp(option_str("fog", "off"), "off");
     {
         const char *fr = option_str("frame_rate", "display");
         extern int host_refresh_hz(void);
         int_hz = !strcasecmp(fr, "display") ? host_refresh_hz() : atoi(fr);
         int_on = int_hz > 61;
     }
-    extern void light_options(void), mix_options(void), puddle_options(void);
-    puddle_options();
+    extern void light_options(void), mix_options(void), water_options(void);
+    water_options();
     light_options();
     mix_options();
 }
@@ -109,6 +109,10 @@ static int frame_timer_hook(CPU *c)
    day, sunset or night, rain or snow: +0, +4 of the settings [verified: 0x4d9c30] */
 static int level_load_hook(CPU *c)
 {
+    {
+        extern void water_level(void);
+        water_level();
+    }
     const char *l = getenv("ORR_RACE_LOOK");
     if (l) {
         uint32_t st = R32(c->esp + 4);
@@ -155,9 +159,9 @@ static int splash_draw_hook(CPU *c)
 {
     uint32_t o = c->ecx;
     {
-        /* (reactive puddles throw their own) */
-        extern int puddle_active(void);
-        if (puddle_active()) {
+        /* (the simulated water throws its own) */
+        extern int water_active(void);
+        if (water_active()) {
             api_return(c, 1, 1);
             return 1;
         }
@@ -354,8 +358,8 @@ static int race_update_hook(CPU *c)
     F_004d7690_orig(c);
     t_sum[T_SIM] += mono_ms() - t0;
     if ((int)R32(0x5d1528 + 0x30) > 0) {
-        extern void puddle_tick(void);
-        puddle_tick();
+        extern void water_tick(void);
+        water_tick();
     }
     if (int_on && !deterministic_run() && (int)R32(0x5d1528 + 0x30) > 0) {
         tick_t = RF32(0x5d1528 + 0x2c);
@@ -493,6 +497,10 @@ static int view_draw_hook(CPU *c)
     static double stick_t;
     uint32_t vcam = R32(R32(c->esp + 4) + 4);
     fog_view_begin(R32(c->esp + 4));
+    {
+        extern void water_test_camera(uint32_t cam);
+        water_test_camera(vcam);
+    }
     if (int_on)
         cam_seen = vcam;        /* (the camera this race draws with: int_snapshot reads it) */
     double st_now = mono_ms();
@@ -602,8 +610,13 @@ static int time_world_hook(CPU *c)
 {
     double t0 = mono_ms();
     fog_write(1);
+    uint32_t view = R32(c->esp + 4);
     F_0054ea20_orig(c);
     t_sum[T_WORLD] += mono_ms() - t0;
+    {
+        extern void water_draw(CPU * c, uint32_t view);
+        water_draw(c, view);
+    }
     return 1;
 }
 TIMED(time_walk_hook, T_WALK, native_walk_call)
@@ -773,7 +786,8 @@ void game_init(void)
     hook_terrain_fog = fog_hook;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
-    extern int puddle_draw_hook(CPU *c), puddle_sky_hook(CPU *c);
+    extern int puddle_draw_hook(CPU *c), puddle_sky_hook(CPU *c), puddle_init_hook(CPU *c);
+    hook_puddle_init = puddle_init_hook;
     hook_puddle_draw = puddle_draw_hook;
     hook_puddle_sky = puddle_sky_hook;
     hook_race_update = race_update_hook;
@@ -781,11 +795,11 @@ void game_init(void)
     hook_splash_draw = splash_draw_hook;
     hook_time_sky = time_sky_hook;
     if (getenv("ORR_TIME_LOG")) {
-        hook_time_world = time_world_hook;
         hook_terrain_walk = time_walk_hook;
         hook_terrain_land = time_land_hook;
-        hook_terrain_fog = time_fog_hook;
     }
+    hook_time_world = time_world_hook;
+    hook_terrain_fog = time_fog_hook;
     hook_view_draw = view_draw_hook;
     extern int light_car_hook(CPU *c);
     hook_car_draw = light_car_hook;

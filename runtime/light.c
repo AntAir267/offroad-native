@@ -21,6 +21,8 @@ static char want_env[32], want_look[32], want_layout[32];
 static int want_changed;
 static uint8_t *m_sun, *m_amb, *m_grid, *m_lamp, *m_lampg;
 static uint16_t *m_height;
+static int lake_w, lake_h;
+static uint8_t *lake_mask;     /* ground below 0, or none on this map */
 static float *m_rt;
 static float light_dir[3];
 #define MAX_CARS 12
@@ -151,6 +153,15 @@ static void load(void)
                 }
                 float range = hi > lo ? hi - lo : 1.0f;
                 m_height = malloc((size_t)h[1] * h[2] * 2);
+                lake_w = (int)h[1];
+                lake_h = (int)h[2];
+                free(lake_mask);
+                lake_mask = NULL;
+                if (lo < 0.0f) {
+                    lake_mask = malloc((size_t)h[1] * h[2]);
+                    for (size_t i = 0; i < (size_t)h[1] * h[2]; i++)
+                        lake_mask[i] = hf[i] < 0.0f;
+                }
                 for (size_t i = 0; i < (size_t)h[1] * h[2]; i++)
                     m_height[i] = (uint16_t)((hf[i] - lo) / range * 65535.0f + 0.5f);
                 m.sun = m_sun; m.amb = m_amb; m.grid = m_grid; m.height = m_height;
@@ -267,6 +278,24 @@ int light_car_hook(CPU *c)
     return 0;
 }
 
+/* any ground below the lake's level, 0, in this box of the world? (the lake's cells [verified: 0 flagged cells on the other maps, and none
+   of them has ground below 0]) */
+int light_lake_near(float x0, float z0, float x1, float z1)
+{
+    if (!lake_mask)
+        return 0;
+    float cell = 512.0f;
+    int W = lake_w, H = lake_h;
+    int a0 = (int)(x0 / cell), a1 = (int)(x1 / cell) + 1, b0 = (int)(z0 / cell), b1 = (int)(z1 / cell) + 1;
+    a0 = a0 < 0 ? 0 : a0; b0 = b0 < 0 ? 0 : b0;
+    a1 = a1 >= W ? W - 1 : a1; b1 = b1 >= H ? H - 1 : b1;
+    for (int j = b0; j <= b1; j++)
+        for (int i = a0; i <= a1; i++)
+            if (lake_mask[j * W + i])
+                return 1;
+    return 0;
+}
+
 static int on = -1;
 void light_options(void) { on = -1; want_changed = 1; }
 
@@ -325,9 +354,10 @@ int light_terrain_hook(CPU *c)
     }
     vk_light_view(inv, eye, (uint32_t)mode);
     {
-        extern void puddle_view(const float *eye, const uint32_t *cars, int ncars, int level_new);
+        extern void water_view(const float *eye, const float *forward, const uint32_t *cars, int ncars, int level_new);
         static int was_cars;
-        puddle_view(eye, cars, ncars, ncars == 0 && was_cars);
+        float fwd[3] = {RF32(cam + 0x24), RF32(cam + 0x28), RF32(cam + 0x2c)};
+        water_view(eye, fwd, cars, ncars, ncars == 0 && was_cars);
         was_cars = ncars;
     }
     /* how strong a car's lamps are for the look (ORR_CAR_LIGHTS or the option): night, dusk, rain; not by day */
