@@ -57,6 +57,7 @@ static Row rows[] = {
     {"draw_distance", "far", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0, 0},
     {"ambient_occlusion", "on", "Ambient Occlusion", "Soft Shadows In Corners And Under Things", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 0},
     {"volumetric_dust", "on", "Volumetric Dust", "Real Clouds Of Dust And Exhaust Smoke", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 0},
+    {"frame_rate", "display", "Frame Rate", "Frames Between The Game's 60 Ticks A Second", 4, {"60", "120", "144", "Screen"}, {"60", "120", "144", "display"}, 0, 0, 0, 0},
     {"camera_stick", "on", "Right Stick Camera", "The Right Stick Swings The Camera Round The Car", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 0},
     {"streamer_mode", "off", "Streamer Mode", "Hides The Confederate Flag Paint Jobs - From The Next Load", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 0},
     {"baked_lighting", "on", "Ray-Traced Lighting", "Real Shadows And Shade", 2, {"Original", "Baked"}, {"off", "on"}, 0, 0, 0, 2},
@@ -82,7 +83,7 @@ static float fl_y(int i)
             place += k < i;
             total++;
         }
-    return 90.0f + (total > 8 ? 32.0f : total > 7 ? 36.0f : 40.0f) * (float)place;
+    return 90.0f + (total > 9 ? 29.0f : total > 8 ? 32.0f : total > 7 ? 36.0f : 40.0f) * (float)place;
 }
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 

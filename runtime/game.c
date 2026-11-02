@@ -39,13 +39,19 @@ float game_far(float far)
    goes to the volumetric renderer (vk.c, from 1nsane-native) in view space and the sprite is not drawn. That
    renderer reads a Direct3D view and projection, which this game does not use, so it gets a copy of the
    device's state with them made up from the camera (+0x178, +0x188: z = a + b / w; focal length 640). */
-static int dust_on, streamer_on, stick_camera;
+static int dust_on, streamer_on, stick_camera, int_on, int_hz;
 
 void game_options(void)
 {
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
     streamer_on = !strcasecmp(option_str("streamer_mode", "off"), "on");
     stick_camera = !strcasecmp(option_str("camera_stick", "on"), "on");
+    {
+        const char *fr = option_str("frame_rate", "display");
+        extern int host_refresh_hz(void);
+        int_hz = !strcasecmp(fr, "display") ? host_refresh_hz() : atoi(fr);
+        int_on = int_hz > 61;
+    }
     extern void light_options(void), mix_options(void);
     light_options();
     mix_options();
@@ -59,6 +65,8 @@ void game_options(void)
    So a frame waits here for a whole tick since the last. (The timer's own wait, its second argument, spins on Sleep(0) and
    counts from when it last finished: on a beat of its own it spun a little longer every frame, 14 ms a frame by a lap's end.)
    Not in test runs (their clock is a count of frames); the ticks a second are what they were, only the frames with none go. */
+enum { T_WORLD, T_WALK, T_LAND, T_FOG, T_SKY, T_SIM, T_N };
+static double t_sum[T_N];
 static unsigned long puddle_recent;
 static double mono_ms(void)
 {
@@ -134,17 +142,30 @@ static int car_available_hook(CPU *c)
     return 1;
 }
 
+/* A splash is 4 parts of 16 see-through sheets, of flecks over mostly nothing, about 72 splashes a car through a puddle: 25 screens
+   of overdraw, and the CPU clipping each sheet. Only one part of each is drawn now, chosen for the splash's life so nothing
+   flickers, and the renderer makes its flecks 4 times as strong (vk.c), so the look holds. The splash's life, its random numbers and
+   its sound are the game's: only the drawing changes. Part: [+0xa0] + i * 0xf4 its live byte [verified: 0x4a2630, a first go took +0xa0 for the array and crashed]. */
+static int splash_draw_hook(CPU *c)
+{
+    uint32_t o = c->ecx;
+    int keep = (int)(((o >> 4) * 2654435761u) >> 30);
+    uint32_t parts = R32(o + 0xa0);
+    uint8_t live[4];
+    for (int i = 0; i < 4; i++) {
+        live[i] = R8(parts + (uint32_t)i * 0xf4);
+        if (i != keep)
+            W8(parts + (uint32_t)i * 0xf4, 0);
+    }
+    F_004a2630_orig(c);
+    for (int i = 0; i < 4; i++)
+        W8(parts + (uint32_t)i * 0xf4, live[i]);
+    return 1;
+}
+
 /* (timing only) */
 static int puddle_hit_hook(CPU *c)
 {
-    /* One splash in three: the game makes one per wheel per tick, and with what the sheets cost it to clip and us to draw the
-       frame went over its time, with Extreme worst (game CPU 12 ms, 21 in the spray) [verified: frame-trace.txt, Ant's play] */
-    static unsigned every;
-    if (every++ % 3) {
-        puddle_recent = frame_count;
-        api_return(c, 0, 6);
-        return 1;
-    }
     double t = mono_ms();
     F_0049fe30_orig(c);
     if (frame_count > puddle_recent + 30)
@@ -188,6 +209,191 @@ static int texture_name_hook(CPU *c)
     return 0;
 }
 
+static int deterministic_run(void)
+{
+    extern int deterministic;
+    return deterministic;
+}
+
+/* Frames between ticks. The game draws what its last update made and steps at 60 a second, with no interpolation of its own
+   [verified: 0x4d6be0, 0x4d7690, 0x4db240]. So before each normal frame (which shows the tick as it is, the game's picture) come
+   draw-only frames: camera, cars and wheels put between the last two ticks for the drawing, and put back; the update does nothing
+   in them, and the times it hands the drawing are zero. The picture is up to a tick behind the game for it. Ticks stay the game's:
+   the update and frame_timer_hook are untouched. Not in test runs, two-player races, or the race's menus. */
+#define INT_OBJS 64
+typedef struct { float prev[15], cur[15]; uint32_t o; int have; } IntObj;
+static IntObj ints[INT_OBJS];
+static int nints;
+static float cam_prev[16], cam_cur[16];
+static uint32_t cam_seen;
+static int draw_only;
+static double t_tick;
+static float int_alpha = 1.0f, tick_t;
+/* how long a draw-only frame takes, watched so one never makes the normal frame late */
+static double int_frame_ms = 6.0;
+static void obj_read(uint32_t o, float *m)
+{
+    for (int i = 0; i < 15; i++)
+        m[i] = RF32(o + 0x24 + 4 * (uint32_t)i);
+}
+static void obj_write(uint32_t o, const float *m)
+{
+    for (int i = 0; i < 15; i++) {
+        union { float f; uint32_t u; } u = {m[i]};
+        W32(o + 0x24 + 4 * (uint32_t)i, u.u);
+    }
+}
+static const uint32_t cam_at[4] = {0x4, 0x14, 0x24, 0x44};
+static void cam_read(uint32_t cam, float *m)
+{
+    for (int i = 0; i < 4; i++)
+        for (int k = 0; k < 4; k++)
+            m[i * 4 + k] = RF32(cam + cam_at[i] + 4 * (uint32_t)k);
+}
+static void cam_write(uint32_t cam, const float *m)
+{
+    for (int i = 0; i < 4; i++)
+        for (int k = 0; k < 4; k++) {
+            union { float f; uint32_t u; } u = {m[i * 4 + k]};
+            W32(cam + cam_at[i] + 4 * (uint32_t)k, u.u);
+        }
+    W8(cam + 0x1d0, 0);
+}
+/* rows blended and made unit length again, the position blended; (a cut, a respawn: no blend) */
+static void mix_rows(float *o, const float *a, const float *b, float t, int rows)
+{
+    for (int r = 0; r < rows; r++) {
+        float x = a[r * 4] + (b[r * 4] - a[r * 4]) * t, y = a[r * 4 + 1] + (b[r * 4 + 1] - a[r * 4 + 1]) * t, z = a[r * 4 + 2] + (b[r * 4 + 2] - a[r * 4 + 2]) * t;
+        float l = sqrtf(x * x + y * y + z * z);
+        float want = sqrtf(b[r * 4] * b[r * 4] + b[r * 4 + 1] * b[r * 4 + 1] + b[r * 4 + 2] * b[r * 4 + 2]);
+        l = l > 0.0f ? want / l : 1.0f;
+        o[r * 4] = x * l;
+        o[r * 4 + 1] = y * l;
+        o[r * 4 + 2] = z * l;
+        o[r * 4 + 3] = b[r * 4 + 3];
+    }
+}
+static int far_apart(const float *pa, const float *pb, float limit)
+{
+    float x = pa[0] - pb[0], y = pa[1] - pb[1], z = pa[2] - pb[2];
+    return x * x + y * y + z * z > limit * limit;
+}
+static void int_note_object(uint32_t o)
+{
+    if (!o || o < 0x10000u)
+        return;
+    for (int i = 0; i < nints; i++)
+        if (ints[i].o == o) {
+            memcpy(ints[i].prev, ints[i].cur, sizeof ints[i].prev);
+            obj_read(o, ints[i].cur);
+            ints[i].have = 1;
+            if (far_apart(ints[i].prev + 12, ints[i].cur + 12, 2000.0f))
+                memcpy(ints[i].prev, ints[i].cur, sizeof ints[i].prev);
+            return;
+        }
+    if (nints < INT_OBJS) {
+        IntObj *e = &ints[nints++];
+        e->o = o;
+        obj_read(o, e->cur);
+        memcpy(e->prev, e->cur, sizeof e->prev);
+        e->have = 1;
+    }
+}
+/* at a tick's end: the last two positions of everything that moves smoothly */
+static void int_snapshot(void)
+{
+    extern const uint32_t *light_cars(int *n);
+    int n;
+    const uint32_t *cars = light_cars(&n);
+    for (int i = 0; i < n; i++) {
+        int_note_object(cars[i]);
+        uint32_t nw = R32(cars[i] + 0x500);
+        for (uint32_t w = 0; w < nw && w < 8; w++)
+            int_note_object(R32(R32(cars[i] + 0x508) + 4 * w));
+    }
+    t_tick = mono_ms();
+}
+void game_level_loaded(void)
+{
+    nints = 0;
+    cam_seen = 0;
+}
+static int race_update_hook(CPU *c)
+{
+    if (draw_only) {
+        api_return(c, 1, 0);
+        return 1;
+    }
+    double t0 = mono_ms();
+    F_004d7690_orig(c);
+    t_sum[T_SIM] += mono_ms() - t0;
+    if (int_on && !deterministic_run() && (int)R32(0x5d1528 + 0x30) > 0) {
+        tick_t = RF32(0x5d1528 + 0x2c);
+        int_snapshot();
+    }
+    return 1;
+}
+static int race_draw_hook(CPU *c)
+{
+    extern int pad_is_two_players(void);
+    uint32_t state = c->ecx;
+    if (getenv("ORR_INT_LOG") && !draw_only && frame_count % 300 == 0)
+        LOG(LOG_ALWAYS, "int: on %d hz %d two %d menu %d cam %x objs %d est %.2f since tick %.2f", int_on, int_hz, pad_is_two_players(), R8(state + 0xfdd), cam_seen, nints, int_frame_ms, mono_ms() - t_tick);
+    if (draw_only || !int_on || deterministic_run() || pad_is_two_players() || R8(state + 0xfdd) || t_tick <= 0.0 || !cam_seen)
+        return 0;
+    double slot = 1000.0 / (double)(int_hz > 60 ? int_hz : 120), now = mono_ms();
+    uint32_t arg = R32(c->esp + 4);
+    uint32_t times[3] = {R32(0x5d1528 + 0x24), R32(0x5d1528 + 0x2c), R32(0x5d1528 + 0x30)};
+    /* each shown a slot after the last: started a frame's time early, and placed for when it will show */
+    double when = t_tick + slot;
+    while (when + 1.0 < t_tick + 1000.0 / 60.0) {
+        now = mono_ms();
+        if (now < when - int_frame_ms) {
+            struct timespec ts = {0, (long)((when - int_frame_ms - now) * 1e6)};
+            nanosleep(&ts, NULL);
+        } else if (now + int_frame_ms > t_tick + 1000.0 / 60.0) {
+            break;
+        }
+        double t0 = mono_ms();
+        int_alpha = (float)((t0 + int_frame_ms - t_tick) * 0.06);
+        int_alpha = int_alpha > 1.0f ? 1.0f : int_alpha;
+        W32(0x5d1528 + 0x24, 0);
+        W32(0x5d1528 + 0x2c, 0);
+        W32(0x5d1528 + 0x30, 0);
+        draw_only = 1;
+        c->ecx = state;
+        guest_call(c, 0x4d6be0, 1, arg);
+        guest_call(c, 0x4fc450, 0);
+        draw_only = 0;
+        W32(0x5d1528 + 0x24, times[0]);
+        W32(0x5d1528 + 0x2c, times[1]);
+        W32(0x5d1528 + 0x30, times[2]);
+        int_frame_ms += (mono_ms() - t0 - int_frame_ms) * 0.1;
+        when += slot;
+    }
+    int_frame_ms *= 0.998;         /* (one slow one must not stop them for good) */
+    int_alpha = 1.0f;
+    c->ecx = state;
+    return 0;
+}
+/* the cars and wheels where they were at this draw-only moment: *back says how to put them back */
+static void int_apply(int restore)
+{
+    float mixed[15];
+    for (int i = 0; i < nints; i++) {
+        IntObj *e = &ints[i];
+        if (restore) {
+            obj_write(e->o, e->cur);
+        } else {
+            mix_rows(mixed, e->prev, e->cur, int_alpha, 3);
+            for (int k = 0; k < 3; k++)
+                mixed[12 + k] = e->prev[12 + k] + (e->cur[12 + k] - e->prev[12 + k]) * int_alpha;
+            obj_write(e->o, mixed);
+        }
+        W32(e->o + 0x68, R32(e->o + 0x68) + 1);    /* (its parts' world matrices are cached against this) */
+    }
+}
+
 /* The right stick swings the camera round the car, for the drawing only: the stick's place is the angle, right to look
    right, all the way over to look back; up looks down from above. The game's camera is put back after the view, as its
    chase works from where it was. Camera: rows +0x4, +0x14, +0x24 (right, up, forward), position +0x44, the matrix of the
@@ -206,8 +412,27 @@ static void turn(uint32_t a, float cy, float sy, float cp, float sp, const float
 }
 static int view_draw_hook(CPU *c)
 {
+    {
+        extern void game_time_frame(void);
+        if (getenv("ORR_TIME_LOG"))
+            game_time_frame();
+    }
     extern int pad_axis_value(int axis), pad_is_two_players(void);
     static float yaw, pitch;
+    static double stick_t;
+    uint32_t vcam = R32(R32(c->esp + 4) + 4);
+    /* the camera's last two ticks, seen here as the drawing starts */
+    if (int_on && !draw_only) {
+        memcpy(cam_prev, cam_cur, sizeof cam_prev);
+        cam_read(vcam, cam_cur);
+        if (!cam_seen || cam_seen != vcam || far_apart(cam_prev + 12, cam_cur + 12, 800.0f))
+            memcpy(cam_prev, cam_cur, sizeof cam_prev);
+        cam_seen = vcam;
+    }
+    double st_now = mono_ms();
+    float st_dt = stick_t > 0.0 ? (float)(st_now - stick_t) : 16.67f;
+    stick_t = st_now;
+    float ease = 1.0f - expf(-st_dt * 0.0119f);         /* (0.18 a frame at 60: by time, as frames now vary) */
     float rx = (float)pad_axis_value(2) / 32768.0f, ry = (float)pad_axis_value(3) / 32768.0f;
     float mag = sqrtf(rx * rx + ry * ry);
     if (!stick_camera || pad_is_two_players() || mag < 0.18f)
@@ -216,12 +441,26 @@ static int view_draw_hook(CPU *c)
         rx *= (mag - 0.18f) / 0.82f / mag;
         ry *= (mag - 0.18f) / 0.82f / mag;
     }
-    yaw += (rx * 3.14159f - yaw) * 0.18f;
+    yaw += (rx * 3.14159f - yaw) * ease;
     float want_p = ry < 0.0f ? -ry * 0.75f : -ry * 0.12f;
-    pitch += (want_p - pitch) * 0.18f;
+    pitch += (want_p - pitch) * ease;
+    /* a draw-only frame: everything between the last two ticks */
+    float cam_mid[16];
+    if (draw_only) {
+        mix_rows(cam_mid, cam_prev, cam_cur, int_alpha, 3);
+        for (int k = 0; k < 4; k++)
+            cam_mid[12 + k] = cam_prev[12 + k] + (cam_cur[12 + k] - cam_prev[12 + k]) * int_alpha;
+        cam_write(vcam, cam_mid);
+        int_apply(0);
+    }
     if (fabsf(yaw) < 0.002f && fabsf(pitch) < 0.002f) {
         yaw = pitch = 0.0f;
-        return 0;
+        if (!draw_only)
+            return 0;
+        F_004daec0_orig(c);
+        cam_write(vcam, cam_cur);
+        int_apply(1);
+        return 1;
     }
     uint32_t view = R32(c->esp + 4), cam = R32(view + 4), keep = c->ecx;
     uint32_t saved[16];
@@ -272,7 +511,47 @@ static int view_draw_hook(CPU *c)
         for (int k = 0; k < 4; k++)
             W32(cam + at[i] + 4 * (uint32_t)k, saved[i * 4 + k]);
     W8(cam + 0x1d0, 0);
+    if (draw_only) {
+        cam_write(vcam, cam_cur);
+        int_apply(1);
+    }
     return 1;
+}
+
+/* ORR_TIME_LOG=1: ms per frame of each piece, over the last 300 frames */
+#define TIMED(name, id, fn)                                     \
+    static int name(CPU *c)                                     \
+    {                                                           \
+        double t0 = mono_ms();                                  \
+        fn(c);                                                  \
+        t_sum[id] += mono_ms() - t0;                            \
+        return 1;                                               \
+    }
+TIMED(time_world_hook, T_WORLD, F_0054ea20_orig)
+TIMED(time_walk_hook, T_WALK, F_0054f230_orig)
+TIMED(time_land_hook, T_LAND, F_00540260_orig)
+TIMED(time_fog_hook, T_FOG, F_00544da0_orig)
+/* The clouds fan out to 3 x the far plane, split until no edge is over 3200 units [verified: 0x4ea330, 0x4e8250], so their
+   CPU cost goes with the far plane squared, and they end in the fog anyway: drawn for the game's own far plane. */
+static int time_sky_hook(CPU *c)
+{
+    double t0 = mono_ms();
+    uint32_t cam = R32(R32(c->esp + 4) + 4), far_now = R32(cam + 0x250);
+    union { float f; uint32_t u; } g = {RF32(cam + 0x250) / far_scale()};
+    W32(cam + 0x250, g.u);
+    F_004ea330_orig(c);
+    W32(cam + 0x250, far_now);
+    t_sum[T_SKY] += mono_ms() - t0;
+    return 1;
+}
+void game_time_frame(void)
+{
+    static unsigned long n;
+    if (++n % 300 == 0) {
+        LOG(LOG_ALWAYS, "time: frame %lu sim %.2f world %.2f (walk %.2f land %.2f fog %.2f) sky %.2f", frame_count, t_sum[T_SIM] / 300, t_sum[T_WORLD] / 300,
+            t_sum[T_WALK] / 300, t_sum[T_LAND] / 300, t_sum[T_FOG] / 300, t_sum[T_SKY] / 300);
+        memset(t_sum, 0, sizeof t_sum);
+    }
 }
 
 static int puff_draw_hook(CPU *c)
@@ -307,6 +586,12 @@ static int puff_draw_hook(CPU *c)
        x, y before the divide [verified: 0x53c2ab; a first go that took it for a view matrix put puffs 100000 away] */
     float f = RF32(cam + 0x150), cx = RF32(cam + 0x25c), cy = RF32(cam + 0x260);
     float x = RF32(o + 0x2c), y = RF32(o + 0x30), z = RF32(o + 0x34);
+    if (draw_only && !exhaust) {        /* (a puff moves by its velocity, a draw-only frame is before the tick's end) */
+        float back = (1.0f - int_alpha) * tick_t;
+        x -= back * RF32(o + 0x54);
+        y -= back * RF32(o + 0x58);
+        z -= back * RF32(o + 0x5c);
+    }
     float vz = m[3] * x + m[7] * y + m[11] * z + m[15];
     if (!(vz > 1.0f) || !(f > 0.0f)) {
         api_return(c, 1, 1);
@@ -389,6 +674,16 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    hook_race_update = race_update_hook;
+    hook_race_draw = race_draw_hook;
+    hook_splash_draw = splash_draw_hook;
+    hook_time_sky = time_sky_hook;
+    if (getenv("ORR_TIME_LOG")) {
+        hook_time_world = time_world_hook;
+        hook_time_walk = time_walk_hook;
+        hook_time_land = time_land_hook;
+        hook_time_fog = time_fog_hook;
+    }
     hook_view_draw = view_draw_hook;
     extern int light_car_hook(CPU *c);
     hook_car_draw = light_car_hook;

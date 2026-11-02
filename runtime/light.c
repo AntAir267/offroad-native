@@ -238,6 +238,10 @@ static void load(void)
         }
     }
     ncars = 0;
+    {
+        extern void game_level_loaded(void);
+        game_level_loaded();
+    }
     LOG(LOG_ALWAYS, "baked lighting: %s track %s %s: %s", want_env, want_layout, want_look, m.sun ? file : "no maps");
     vk_light_load(&m);
     /* the last ones: the render thread has had its load command before it can reach this point again */
@@ -250,6 +254,8 @@ static void load(void)
 
 /* Car lights: the cars the race has drawn, whose matrices are read at the start of each view (the terrain draws before them).
    The object's matrix: three rows of four floats, then the position [verified: 0x52e300, 0x49b300]. */
+const uint32_t *light_cars(int *n) { *n = ncars; return cars; }
+
 int light_car_hook(CPU *c)
 {
     uint32_t o = c->ecx;

@@ -619,6 +619,8 @@ void main()
 #else
     if (pc.texsmp.x >= 0)
         t0 = texture(sampler2D(textures[pc.texsmp.x], samplers[pc.texsmp.z]), v_tc.xy);
+    if ((fl & 2048u) != 0u)            /* (the water's spray: vk.c) */
+        t0.a = min(t0.a * pc.fog.z, 1.0);
 #endif
     if (pc.texsmp.y >= 0)
         t1 = texture(sampler2D(textures[pc.texsmp.y], samplers[pc.texsmp.w]), v_tc.zw);

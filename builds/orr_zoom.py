@@ -68,6 +68,16 @@ HOOKS = {
     0x53c260: 'puff_draw',
     # game.c: the main loop's frame timer (ECX the timer; the time out, whether to wait for a whole tick)
     0x56b180: 'frame_timer',
+    # game.c: a splash's draw (ECX the object, first argument the view); the clouds (first argument the view)
+    0x4a2630: 'splash_draw',
+    # game.c: timed by ORR_TIME_LOG (development): pieces of a view's drawing
+    0x54ea20: 'time_world',
+    0x54f230: 'time_walk',
+    0x540260: 'time_land',
+    0x544da0: 'time_fog',
+    0x4ea330: 'time_sky',
+    0x4d7690: 'race_update',
+    0x4d6be0: 'race_draw',
     # game.c: whether a car can be chosen (ECX the car, EDX its player's unlocks): ORR_UNLOCK_ALL for race.sh
     0x4784f0: 'car_available',
     # menu.c: AUDIO's screen handler (ECX the widget, EDX the message); the widget table's constructor (ECX its block)

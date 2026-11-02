@@ -3725,6 +3725,12 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
         memcpy(&pc.flags[2], &vk_fog_end, 4);
         memcpy(&pc.flags[3], &vk_fog_start, 4);
     }
+    /* the water's spray, a quarter of its sheets (game.c splash_draw_hook): their flecks 4 times as strong */
+    if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && !r[RS_ZWRITEENABLE] &&
+        st->tex[0] && st->tex[0]->width == 64 && st->tex[0]->height == 64 && nv >= 16 && (v[0].packed ? (v[0].rgba[0] & 0xffffffu) == 0xffffffu : v[0].diffuse[0] >= 0.99f)) {
+        fl |= 1u << 11;
+        pc.fog[2] = 4.0f;
+    }
     pc.flags[0] = fl;
     pc.flags[1] = inst_bind ? 0 : vk_fade;   /* (instanced: each copy's own, from tnl.vert) */
     if (inst_bind) {
@@ -3750,37 +3756,6 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     VkDeviceAddress vaddr = 0, iaddr = 0;
     uint32_t nidx, first = 0;
     int32_t vbase = 0;
-    /* A car in a puddle: the water's spray comes in three batches, 25 screens' worth of see-through sheets at the peak where 2.5 is
-       usual. At 2560x1440 on the 890M that took a 5 ms frame to 24: Ant's puddle lag [verified: GPU time and coverage, frame by frame].
-       The layers wash out long before that many: about 5 screens a batch (there are three) are drawn, every so many sheets. */
-    static uint16_t thin_idx[65536];
-    if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && idx && ni >= 6 && ni <= 65000 &&
-        st->tex[0] && st->tex[0]->width == 64) {     /* (the spray's texture only: the terrain's blended passes came out checkered, Ant) */
-        double sa = 0;
-        for (int t = 0; t + 2 < ni; t += 3) {
-            const SwVertex *A = &v[idx[t]], *B = &v[idx[t + 1]], *C = &v[idx[t + 2]];
-            sa += fabs((double)(B->x - A->x) * (C->y - A->y) - (double)(C->x - A->x) * (B->y - A->y)) * 0.5;
-        }
-        sa /= 1024.0 * 768.0;
-        if (sa > 5.0) {
-            /* (a sheet, clipped by the game, is a fan: its triangles share their first vertex) */
-            int keep = (int)ceil(sa / 5.0), m = 0, sheet = 0;
-            for (int t = 0; t + 2 < ni;) {
-                int e = t + 3;
-                while (e + 2 < ni && idx[e] == idx[t])
-                    e += 3;
-                if (sheet++ % keep == 0) {
-                    memcpy(thin_idx + m, idx + t, (size_t)(e - t) * sizeof *idx);
-                    m += e - t;
-                }
-                t = e;
-            }
-            if (m) {
-                idx = thin_idx;
-                ni = m;
-            }
-        }
-    }
     if (far_bind) {                               /* the far terrain's mesh (vk_far_draw) */
         vbuf = ibuf = far_mesh.buf;
         voff = 0;
