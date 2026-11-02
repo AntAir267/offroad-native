@@ -68,6 +68,9 @@ HOOKS = {
     0x53c260: 'puff_draw',
     # game.c: the main loop's frame timer (ECX the timer; the time out, whether to wait for a whole tick)
     0x56b180: 'frame_timer',
+    # puddle.c: a puddle's draw, its second pass
+    0x4a0180: 'puddle_draw',
+    0x4a1360: 'puddle_sky',
     # game.c: a splash's draw (ECX the object, first argument the view); the clouds (first argument the view)
     0x4a2630: 'splash_draw',
     # game.c: timed by ORR_TIME_LOG (development): pieces of a view's drawing

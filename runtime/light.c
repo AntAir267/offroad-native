@@ -324,6 +324,12 @@ int light_terrain_hook(CPU *c)
             (m[0] * l[0] + m[4] * l[1] + m[8] * l[2] + m[12]) / W_, (m[1] * l[0] + m[5] * l[1] + m[9] * l[2] + m[13]) / W_, W_);
     }
     vk_light_view(inv, eye, (uint32_t)mode);
+    {
+        extern void puddle_view(const float *eye, const uint32_t *cars, int ncars, int level_new);
+        static int was_cars;
+        puddle_view(eye, cars, ncars, ncars == 0 && was_cars);
+        was_cars = ncars;
+    }
     /* how strong a car's lamps are for the look (ORR_CAR_LIGHTS or the option): night, dusk, rain; not by day */
     float strength = !strncmp(want_look, "night", 5) ? 1.0f : !strncmp(want_look, "sunset", 6) ? 0.3f : strstr(want_look, "rain") ? 0.3f : 0.0f;
     if (strcasecmp(option_str("car_lights", "on"), "on") || getenv("ORR_NO_CAR_LIGHTS"))

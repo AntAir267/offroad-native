@@ -60,6 +60,9 @@
 #include "shaders/taa.frag.spv.h"
 #include "shaders/taau.frag.spv.h"
 #include "shaders/draw.frag.rays.spv.h"
+#include "shaders/puddle.frag.spv.h"
+#include "shaders/puddle.vert.spv.h"
+#include "shaders/puddle_sim.frag.spv.h"
 #include "shaders/smoke.vert.spv.h"
 #include "shaders/smoke.frag.spv.h"
 #include "shaders/smoke.frag.motion.spv.h"
@@ -525,6 +528,7 @@ static int bg_phase = 1;          /* widescreen: still in the frame's leading ba
 static GpuImg *li_sun, *li_amb, *li_grid, *li_height, *li_lamp, *li_lampg;
 static struct { float m[16], sun[4], col[4], amb[4], bounce[4], size[4], mis[4], eye[4], cars[96], lamp[4]; int on, block; uint32_t mode; } li_view;
 static int li_blocks;
+static int pud_copied;
 static int wide_world, wide_world_last;   /* this frame and the last drew the world past the 4:3 picture: a race */
 
 /* Render resolution (options.txt "resolution"): "original" draws at the program's display
@@ -3192,7 +3196,7 @@ static int init(void)
         vkUpdateDescriptorSets(dev, 1, &w, 0, NULL);
     }
     {   /* the volumetric smoke's puffs: the frames' views' blocks, host-written */
-        sm_buf = dbuf_new(((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (VkDeviceSize)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK) * 16,
+        sm_buf = dbuf_new(((VkDeviceSize)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (VkDeviceSize)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (VkDeviceSize)FRAMES * 24) * 16,
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 1);
         memset(sm_buf.map, 0, (size_t)sm_buf.size);
         VkDescriptorBufferInfo bufi = {sm_buf.buf, 0, sm_buf.size};
@@ -7918,6 +7922,7 @@ void vkr_present(Surface *src, const int *rect)
     wide_world = 0;
     li_view.on = 0;
     li_blocks = 0;
+    pud_copied = 0;
     ssao_done = 0;
     ssao_world = 0;
     if (hp_flip && nframes % (unsigned long)hp_flip == 0)
@@ -7993,4 +7998,155 @@ void vkr_present(Surface *src, const int *rect)
         st_draw_ms = st_present_ms = vk_tnl_ms = 0;
         st_t0 = t;
     }
+}
+
+/* Reactive puddles: see runtime/puddle.c. Four grids, each two images (this step, last step) and the ground. */
+#define PUD_GRID 128
+#define PUD_FORMAT VK_FORMAT_R16G16B16A16_SFLOAT
+static struct PudSlot { GpuImg *g[2], *spare[2], *ground, *gspare; int cur, have_ground; float rect[4], level; } pud[VK_PUDDLES];
+static GpuImg *pud_copy, *pud_copy_spare;
+static VkShaderModule sm_pudsim, sm_pudv, sm_pudf;
+typedef struct { uint32_t a[4]; float rect[4], lev[4], ht[4]; } PushPudSim;
+typedef struct { float clip[16]; uint32_t a[4]; float rect[4], lev[4], scr[4]; } PushPud;
+_Static_assert(sizeof(PushPud) <= sizeof(PushDraw), "push constant range");
+
+static VkPipeline pud_pipeline(int kind, VkFormat color, VkFormat depth)
+{
+    uint32_t key = 0x20000000u | (uint32_t)kind;
+    for (int i = 0; i < npipes; i++)
+        if (pipes[i].key == key && pipes[i].color == color && pipes[i].depth == depth)
+            return pipes[i].p;
+    if (npipes == COUNT(pipes))
+        fatal("Vulkan: too many pipelines");
+    if (!sm_pudsim) {
+        sm_pudsim = shader(spv_puddle_sim_frag, sizeof spv_puddle_sim_frag);
+        sm_pudv = shader(spv_puddle_vert, sizeof spv_puddle_vert);
+        sm_pudf = shader(spv_puddle_frag, sizeof spv_puddle_frag);
+    }
+    Pipe *p = &pipes[npipes++];
+    p->key = key;
+    p->depth = depth;
+    p->color = color;
+    if (kind == 0)
+        p->p = pipeline_create(sm_pv, sm_pudsim, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 0, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, color, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
+    else
+        p->p = pipeline_create(sm_pudv, sm_pudf, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 1, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, color, depth, 0, 0, 0, 0);
+    return p->p;
+}
+
+static void pud_sim_pass(GpuImg *t, PushPudSim *pc)
+{
+    begin_rendering(t, NULL);
+    bind_pipeline(pud_pipeline(0, t->format, VK_FORMAT_UNDEFINED));
+    VkViewport vp = {0, 0, (float)t->w, (float)t->h, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    VkRect2D r = {{0, 0}, {t->w, t->h}};
+    vkCmdSetScissor(cb, 0, 1, &r);
+    vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof *pc, pc);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    end_rendering();
+}
+
+/* A view's start: a step of each grid when a tick has passed. Slots: rect x0, z0, sx, sz, level (level below -1e8: not in use);
+   fresh: its place is new. cars: n x {pos, unused; forward, speed}. */
+void vkr_puddle_step(const VkPuddleSlot *s, int ns, const float *cars, int ncars)
+{
+    if (!li_height)
+        return;
+    frame_begin();
+    ncars = ncars > 12 ? 12 : ncars;
+    uint32_t base = (uint32_t)FRAMES * SMOKE_SLOTS * SMOKE_BLOCK + (uint32_t)FRAMES * LIGHT_VIEWS * LIGHT_BLOCK + (uint32_t)fi * 24;
+    memcpy((float *)sm_buf.map + (size_t)base * 4, cars, (size_t)ncars * 8 * sizeof(float));
+    end_rendering();
+    float smp = li_view.mis[0];
+    for (int i = 0; i < ns && i < VK_PUDDLES; i++) {
+        struct PudSlot *p = &pud[i];
+        if (s[i].level < -1e8f)
+            continue;
+        aux_img(&p->g[0], &p->spare[0], PUD_GRID, PUD_GRID, PUD_FORMAT);
+        aux_img(&p->g[1], &p->spare[1], PUD_GRID, PUD_GRID, PUD_FORMAT);
+        aux_img(&p->ground, &p->gspare, PUD_GRID, PUD_GRID, VK_FORMAT_R32_SFLOAT);
+        memcpy(p->rect, s[i].rect, sizeof p->rect);
+        p->level = s[i].level;
+        PushPudSim pc = {{0, 0, 0, base}, {s[i].rect[0], s[i].rect[1], s[i].rect[2], s[i].rect[3]},
+                         {s[i].level, 0, (float)ncars, smp}, {li_view.mis[1], li_view.mis[2], li_view.size[3], (float)li_height->slot}};
+        if (s[i].fresh || !p->have_ground) {
+            barrier(li_height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            pud_sim_pass(p->ground, &pc);
+            barrier(p->ground, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            VkClearColorValue zero = {{0}};
+            VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            for (int k = 0; k < 2; k++) {
+                barrier(p->g[k], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                vkCmdClearColorImage(cb, p->g[k]->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
+                barrier(p->g[k], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+            p->have_ground = 1;
+        }
+        barrier(p->g[p->cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        pc.a[0] = (uint32_t)p->g[p->cur]->slot;
+        pc.a[1] = (uint32_t)p->ground->slot;
+        pc.a[2] = 1;
+        pud_sim_pass(p->g[1 - p->cur], &pc);
+        p->cur = 1 - p->cur;
+        barrier(p->g[p->cur], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+}
+
+/* In the view: a puddle's surface and spray. The picture copied once a frame, for the ground seen through the water. */
+void vkr_puddle_draw(Surface *rt, Surface *zb, int slot, const float *world_to_shot, float time)
+{
+    struct PudSlot *p = &pud[slot];
+    if (!p->have_ground || !p->g[p->cur] || !li_sun || li_view.block < 0)
+        return;
+    GpuImg *c = rt_sync(rt), *z = depth_sync(zb, c);
+    if (!c || !z)
+        return;
+    end_rendering();
+    aux_img(&pud_copy, &pud_copy_spare, c->w, c->h, c->format);
+    if (!pud_copied) {
+        pud_copied = 1;
+        barrier(c, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        barrier(pud_copy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .extent = {c->w, c->h, 1}};
+        vkCmdCopyImage(cb, c->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pud_copy->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+        barrier(pud_copy, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    begin_rendering(c, z);
+    c->gpu_newer = 1;
+    bind_pipeline(pud_pipeline(1, c->format, z->format));
+    VkViewport vp = {0, 0, (float)c->w, (float)c->h, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    VkRect2D sc = {{0, 0}, {c->w, c->h}};
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    /* clip space from the game's screen x, y, w (as draw_impl writes pretransformed vertices), z = a + b / w */
+    float x0 = ui_x(c, 0.5f), x1 = ui_x(c, 1.5f), PW = (float)c->w, H = (float)c->lh;
+    float ax = 2.0f * (x1 - x0) / PW, bx = 2.0f * (x0 - 0.5f * (x1 - x0)) / PW - 1.0f, ay = 2.0f / H, by = 1.0f / H - 1.0f;
+    const float *m = world_to_shot;     /* rows: x w, y w, z w, w; each 4 */
+    PushPud pc;
+    for (int k = 0; k < 4; k++) {       /* (column major) */
+        pc.clip[k * 4 + 0] = ax * m[k] + bx * m[12 + k];
+        pc.clip[k * 4 + 1] = ay * m[4 + k] + by * m[12 + k];
+        pc.clip[k * 4 + 2] = m[8 + k];
+        pc.clip[k * 4 + 3] = m[12 + k];
+    }
+    pc.a[0] = (uint32_t)p->g[p->cur]->slot;
+    pc.a[1] = (uint32_t)p->ground->slot;
+    pc.a[2] = 0;
+    pc.a[3] = (uint32_t)li_view.block;
+    memcpy(pc.rect, p->rect, sizeof pc.rect);
+    pc.lev[0] = p->level;
+    pc.lev[1] = time;
+    pc.lev[2] = li_view.mis[0];
+    pc.lev[3] = getenv("ORR_PUDDLE_DEBUG") ? 1.0f : 0.0f;
+    pc.scr[0] = 1.0f / (float)c->w;
+    pc.scr[1] = 1.0f / (float)c->h;
+    pc.scr[2] = (float)pud_copy->slot;
+    pc.scr[3] = 0;
+    vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+    vkCmdDraw(cb, 48 * 48 * 6, 1, 0, 0);
+    pc.a[2] = 1;
+    vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+    vkCmdDraw(cb, 1500 * 6, 1, 0, 0);
 }

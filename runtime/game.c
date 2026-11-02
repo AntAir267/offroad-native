@@ -52,7 +52,8 @@ void game_options(void)
         int_hz = !strcasecmp(fr, "display") ? host_refresh_hz() : atoi(fr);
         int_on = int_hz > 61;
     }
-    extern void light_options(void), mix_options(void);
+    extern void light_options(void), mix_options(void), puddle_options(void);
+    puddle_options();
     light_options();
     mix_options();
 }
@@ -149,6 +150,14 @@ static int car_available_hook(CPU *c)
 static int splash_draw_hook(CPU *c)
 {
     uint32_t o = c->ecx;
+    {
+        /* (reactive puddles throw their own) */
+        extern int puddle_active(void);
+        if (puddle_active()) {
+            api_return(c, 1, 1);
+            return 1;
+        }
+    }
     int keep = (int)(((o >> 4) * 2654435761u) >> 30);
     uint32_t parts = R32(o + 0xa0);
     uint8_t live[4];
@@ -340,6 +349,10 @@ static int race_update_hook(CPU *c)
     double t0 = mono_ms();
     F_004d7690_orig(c);
     t_sum[T_SIM] += mono_ms() - t0;
+    if ((int)R32(0x5d1528 + 0x30) > 0) {
+        extern void puddle_tick(void);
+        puddle_tick();
+    }
     if (int_on && !deterministic_run() && (int)R32(0x5d1528 + 0x30) > 0) {
         tick_t = RF32(0x5d1528 + 0x2c);
         int_snapshot();
@@ -687,6 +700,9 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    extern int puddle_draw_hook(CPU *c), puddle_sky_hook(CPU *c);
+    hook_puddle_draw = puddle_draw_hook;
+    hook_puddle_sky = puddle_sky_hook;
     hook_race_update = race_update_hook;
     hook_race_draw = race_draw_hook;
     hook_splash_draw = splash_draw_hook;

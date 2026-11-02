@@ -58,7 +58,7 @@ typedef struct Block {
 typedef struct { uint32_t type, size; } Cmd;     /* size: of the whole command, header included */
 
 enum { C_CTX, C_STATE, C_DRAW, C_DRAW_TNL, C_DRAW_INST, C_CLEAR, C_FILL, C_BLT, C_PRESENT, C_FAR_DRAW, C_SH_BEGIN, C_SH_CLASS,
-       C_SH_END, C_LI_LOAD, C_LI_VIEW, C_LI_CARS, C_SM_BEGIN, C_SM_END, C_SM_TAKE, C_SC_BEGIN, C_SC_CAMERA, C_SC_CLASS, C_SC_END, C_FLIP };
+       C_SH_END, C_LI_LOAD, C_LI_VIEW, C_LI_CARS, C_PUD_STEP, C_PUD_DRAW, C_SM_BEGIN, C_SM_END, C_SM_TAKE, C_SC_BEGIN, C_SC_CAMERA, C_SC_CLASS, C_SC_END, C_FLIP };
 
 static int on;                          /* the render thread runs */
 static int tried;
@@ -403,6 +403,17 @@ static void run(const Cmd *c)
     case C_SH_BEGIN: vkr_shadow_begin((const VkShadowView *)p); break;
     case C_SH_CLASS: vkr_shadow_class(*(const int *)p); break;
     case C_SH_END: vkr_shadow_end(); break;
+    case C_PUD_STEP: {
+        const int *q = (const int *)p;
+        vkr_puddle_step((const VkPuddleSlot *)(q + 2), q[0], (const float *)((const VkPuddleSlot *)(q + 2) + q[0]), q[1]);
+        break;
+    }
+    case C_PUD_DRAW: {
+        void *const *q = (void *const *)p;
+        const float *f = (const float *)(q + 2);
+        vkr_puddle_draw((Surface *)q[0], (Surface *)q[1], (int)f[17], f, f[16]);
+        break;
+    }
     case C_LI_CARS: vkr_light_cars((const float *)p + 1, *(const int *)p); break;
     case C_LI_LOAD: vkr_light_load((const VkLightMaps *)p); break;
     case C_LI_VIEW: vkr_light_view((const float *)p, (const float *)p + 16, ((const uint32_t *)p)[19]); break;
@@ -965,6 +976,38 @@ void vk_shadow_end(void)
         return;
     }
     put(C_SH_END, sizeof(Cmd));
+    publish();
+}
+
+void vk_puddle_step(const VkPuddleSlot *s, int ns, const float *cars, int ncars)
+{
+    if (!going()) {
+        vkr_puddle_step(s, ns, cars, ncars);
+        return;
+    }
+    Cmd *c = put(C_PUD_STEP, sizeof(Cmd) + 8 + sizeof *s * (size_t)ns + sizeof(float) * 8 * (size_t)ncars);
+    int *q = (int *)(c + 1);
+    q[0] = ns;
+    q[1] = ncars;
+    memcpy(q + 2, s, sizeof *s * (size_t)ns);
+    memcpy((VkPuddleSlot *)(q + 2) + ns, cars, sizeof(float) * 8 * (size_t)ncars);
+    publish();
+}
+
+void vk_puddle_draw(Surface *rt, Surface *zb, int slot, const float *rows, float time)
+{
+    if (!going()) {
+        vkr_puddle_draw(rt, zb, slot, rows, time);
+        return;
+    }
+    Cmd *c = put(C_PUD_DRAW, sizeof(Cmd) + 2 * sizeof(void *) + 18 * sizeof(float));
+    void **q = (void **)(c + 1);
+    q[0] = rt;
+    q[1] = zb;
+    float *f = (float *)(q + 2);
+    memcpy(f, rows, 16 * sizeof(float));
+    f[16] = time;
+    f[17] = (float)slot;
     publish();
 }
 
