@@ -14,6 +14,7 @@
 #include "funcs.h"
 #include "gfx.h"
 #include "vk.h"
+#include "native_land.h"
 
 /* A camera's far plane, +0x250, comes through 0x4f1350 from the race's setup and again from the camera's own stored
    values, so a raised one comes back in. All of it must be raised together: the game clips every polygon at z 1 (renderer
@@ -554,9 +555,9 @@ static int view_draw_hook(CPU *c)
         return 1;                                               \
     }
 TIMED(time_world_hook, T_WORLD, F_0054ea20_orig)
-TIMED(time_walk_hook, T_WALK, F_0054f230_orig)
-TIMED(time_land_hook, T_LAND, F_00540260_orig)
-TIMED(time_fog_hook, T_FOG, F_00544da0_orig)
+TIMED(time_walk_hook, T_WALK, native_walk_call)
+TIMED(time_land_hook, T_LAND, native_land_call)
+TIMED(time_fog_hook, T_FOG, native_fog_call)
 /* The clouds fan out to 3 x the far plane, split until no edge is over 3200 units [verified: 0x4ea330, 0x4e8250], so their
    CPU cost goes with the far plane squared, and they end in the fog anyway: drawn for the game's own far plane. */
 static int time_sky_hook(CPU *c)
@@ -694,10 +695,19 @@ static int puff_draw_hook(CPU *c)
     return 1;
 }
 
+/* The terrain's walk, land and fog: native_land.c does the whole call, or calls the original */
+static int walk_hook(CPU *c) { native_walk_call(c); return 1; }
+static int land_hook(CPU *c) { native_land_call(c); return 1; }
+static int fog_hook(CPU *c) { native_fog_call(c); return 1; }
+
 void game_init(void)
 {
     if (!widescreen_allowed())
         return;
+    native_land_init();
+    hook_terrain_walk = walk_hook;
+    hook_terrain_land = land_hook;
+    hook_terrain_fog = fog_hook;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
     extern int puddle_draw_hook(CPU *c), puddle_sky_hook(CPU *c);
@@ -709,9 +719,9 @@ void game_init(void)
     hook_time_sky = time_sky_hook;
     if (getenv("ORR_TIME_LOG")) {
         hook_time_world = time_world_hook;
-        hook_time_walk = time_walk_hook;
-        hook_time_land = time_land_hook;
-        hook_time_fog = time_fog_hook;
+        hook_terrain_walk = time_walk_hook;
+        hook_terrain_land = time_land_hook;
+        hook_terrain_fog = time_fog_hook;
     }
     hook_view_draw = view_draw_hook;
     extern int light_car_hook(CPU *c);

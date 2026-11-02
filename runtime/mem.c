@@ -10,6 +10,7 @@
 #include "runtime.h"
 
 static pthread_mutex_t mem_lock = PTHREAD_MUTEX_INITIALIZER;
+unsigned long mem_heap_ops;         /* (native_land.c's check) */
 #define GRAN 0x10000u
 
 /* ------------------------------------------------------------------ regions */
@@ -72,6 +73,7 @@ static uint32_t region_place(uint32_t size)
 
 uint32_t vm_alloc(uint32_t addr, uint32_t size, int reserve_only)
 {
+    mem_heap_ops++;
     (void)reserve_only;
     if (!size)
         return 0;
@@ -126,6 +128,7 @@ uint32_t vm_alloc_table(uint32_t bytes)
 
 int vm_free(uint32_t addr, uint32_t size, int release)
 {
+    mem_heap_ops++;
     pthread_mutex_lock(&mem_lock);
     int k = region_find(addr);
     int ok = 0;
@@ -267,6 +270,7 @@ static uint32_t heap_grow(Heap *h, uint32_t need)
 
 uint32_t heap_alloc(uint32_t hh, uint32_t size, int zero)
 {
+    mem_heap_ops++;
     Heap *h = heap_of(hh);
     if (!h)
         return 0;
@@ -316,6 +320,7 @@ static int valid_block(uint32_t p)
 
 int heap_free(uint32_t hh, uint32_t p)
 {
+    mem_heap_ops++;
     Heap *h = heap_of(hh);
     if (!h || !p)
         return p == 0;
@@ -364,6 +369,7 @@ uint32_t heap_size(uint32_t hh, uint32_t p)
 
 uint32_t heap_realloc(uint32_t hh, uint32_t p, uint32_t size, int zero, int in_place_only)
 {
+    mem_heap_ops++;
     if (!p)
         return in_place_only ? 0 : heap_alloc(hh, size, zero);
     if (!valid_block(p))
@@ -509,6 +515,21 @@ uint64_t mem_hash(void)
         h = hash_live(h ^ regions[i].base, regions[i].base, regions[i].size, lo, hi, nd);
     pthread_mutex_unlock(&mem_lock);
     return h;
+}
+
+/* The ranges mem_hash covers, for native_land.c's check */
+int mem_ranges(uint32_t *base, uint32_t *size, int max)
+{
+    int n = 0;
+    base[n] = IMAGE_BASE + 0xc3000u;
+    size[n++] = IMAGE_SIZE - 0xc3000u;
+    pthread_mutex_lock(&mem_lock);
+    for (int i = 0; i < nregions && n < max; i++) {
+        base[n] = regions[i].base;
+        size[n++] = regions[i].size;
+    }
+    pthread_mutex_unlock(&mem_lock);
+    return n;
 }
 
 /* Dump format: repeated [u32 base][u32 size][bytes]. */

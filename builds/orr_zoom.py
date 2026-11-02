@@ -75,9 +75,10 @@ HOOKS = {
     0x4a2630: 'splash_draw',
     # game.c: timed by ORR_TIME_LOG (development): pieces of a view's drawing
     0x54ea20: 'time_world',
-    0x54f230: 'time_walk',
-    0x540260: 'time_land',
-    0x544da0: 'time_fog',
+    # (and the terrain's walk, land and fog passes: native_land.c)
+    0x54f230: 'terrain_walk',
+    0x540260: 'terrain_land',
+    0x544da0: 'terrain_fog',
     0x4ea330: 'time_sky',
     0x4d7690: 'race_update',
     0x4d6be0: 'race_draw',

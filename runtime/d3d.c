@@ -28,6 +28,7 @@
 #include <time.h>
 #include "runtime.h"
 #include "gfx.h"
+#include "native_land.h"
 #include "options.h"
 #include "vk.h"
 
@@ -1886,6 +1887,10 @@ GMETHOD(dev_GetLight, 3)
 
 GMETHOD(dev_SetRenderState, 3)
 {
+    if (native_ab_mode) {
+        uint32_t a[2] = {ARG(1), ARG(2)};
+        native_ab_record(0x110, a, sizeof a);
+    }
     Device *d = DEV(ARG(0));
     uint32_t s = ARG(1), v = ARG(2);
     char vs[48];
@@ -1935,6 +1940,13 @@ GMETHOD(dev_DrawPrimitive, 6)
     Fetch f;
     if (!verts || !fvf_layout(fvf, &l) || !l.pos)
         return D3DERR_INVALIDVERTEXTYPE;
+    if (native_ab_mode) {
+        uint32_t a[3] = {prim, fvf, n};
+        native_ab_record(0x101, a, sizeof a);
+        native_ab_record(0x102, gptr(verts), (size_t)n * l.stride);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     fetch_interleaved(&f, &l, verts);
     return draw(d, API_DP, prim, &f, 0, n, 0, 0, NULL);
 }
@@ -1947,6 +1959,14 @@ GMETHOD(dev_DrawIndexedPrimitive, 8)
     Fetch f;
     if (!verts || !idx || !fvf_layout(fvf, &l) || !l.pos)
         return D3DERR_INVALIDVERTEXTYPE;
+    if (native_ab_mode) {
+        uint32_t a[4] = {prim, fvf, n, ni};
+        native_ab_record(0x103, a, sizeof a);
+        native_ab_record(0x102, gptr(verts), (size_t)n * l.stride);
+        native_ab_record(0x104, gptr(idx), (size_t)ni * 2);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     fetch_interleaved(&f, &l, verts);
     return draw(d, API_DIP, prim, &f, 0, n, idx, ni, NULL);
 }
@@ -1973,6 +1993,11 @@ GMETHOD(dev_GetClipStatus, 2)
 
 GMETHOD(dev_DrawPrimitiveStrided, 6)
 {
+    if (native_ab_mode) {
+        native_ab_record(0x105, gptr(c->esp + 8), 12);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     Device *d = DEV(ARG(0));
     uint32_t prim = ARG(1), fvf = ARG(2), sd = ARG(3), n = ARG(4);
     Layout l;
@@ -1985,6 +2010,11 @@ GMETHOD(dev_DrawPrimitiveStrided, 6)
 
 GMETHOD(dev_DrawIndexedPrimitiveStrided, 8)
 {
+    if (native_ab_mode) {
+        native_ab_record(0x106, gptr(c->esp + 8), 12);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     Device *d = DEV(ARG(0));
     uint32_t prim = ARG(1), fvf = ARG(2), sd = ARG(3), n = ARG(4), idx = ARG(5), ni = ARG(6);
     Layout l;
@@ -2005,6 +2035,13 @@ GMETHOD(dev_DrawPrimitiveVB, 6)
     if (!vb || (uint64_t)start + n > vb->n)
         return DDERR_INVALIDPARAMS;
     fvf_layout(vb->fvf, &l);
+    if (native_ab_mode) {
+        uint32_t a[4] = {prim, vb->fvf, start, n};
+        native_ab_record(0x107, a, sizeof a);
+        native_ab_record(0x102, gptr(vb->mem + start * vb->stride), (size_t)n * vb->stride);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     fetch_interleaved(&f, &l, vb->mem);
     return draw(d, API_DPVB, prim, &f, start, n, 0, 0, vb);
 }
@@ -2019,6 +2056,14 @@ GMETHOD(dev_DrawIndexedPrimitiveVB, 8)
     if (!vb || !idx || (uint64_t)start + n > vb->n)
         return DDERR_INVALIDPARAMS;
     fvf_layout(vb->fvf, &l);
+    if (native_ab_mode) {
+        uint32_t a[5] = {prim, vb->fvf, start, n, ni};
+        native_ab_record(0x108, a, sizeof a);
+        native_ab_record(0x102, gptr(vb->mem + start * vb->stride), (size_t)n * vb->stride);
+        native_ab_record(0x104, gptr(idx), (size_t)ni * 2);
+        if (native_ab_mode == 1)
+            return D3D_OK;
+    }
     fetch_interleaved(&f, &l, vb->mem);
     return draw(d, API_DIPVB, prim, &f, start, n, idx, ni, vb);
 }
@@ -2048,6 +2093,10 @@ GMETHOD(dev_GetTexture, 3)
 
 GMETHOD(dev_SetTexture, 3)
 {
+    if (native_ab_mode) {
+        uint32_t a[2] = {ARG(1), ARG(2)};
+        native_ab_record(0x111, a, sizeof a);
+    }
     Device *d = DEV(ARG(0));
     uint32_t s = ARG(1);
     Surface *t = surface_get(ARG(2));
@@ -2076,6 +2125,10 @@ GMETHOD(dev_GetTextureStageState, 4)
 
 GMETHOD(dev_SetTextureStageState, 4)
 {
+    if (native_ab_mode) {
+        uint32_t a[3] = {ARG(1), ARG(2), ARG(3)};
+        native_ab_record(0x112, a, sizeof a);
+    }
     Device *d = DEV(ARG(0));
     uint32_t s = ARG(1), t = ARG(2), v = ARG(3);
     char vs[64];
