@@ -311,6 +311,12 @@ static void int_snapshot(void)
         for (uint32_t w = 0; w < nw && w < 8; w++)
             int_note_object(R32(R32(cars[i] + 0x508) + 4 * w));
     }
+    if (cam_seen) {
+        memcpy(cam_prev, cam_cur, sizeof cam_prev);
+        cam_read(cam_seen, cam_cur);
+        if (far_apart(cam_prev + 12, cam_cur + 12, 800.0f))
+            memcpy(cam_prev, cam_cur, sizeof cam_prev);
+    }
     t_tick = mono_ms();
 }
 void game_level_loaded(void)
@@ -337,8 +343,6 @@ static int race_draw_hook(CPU *c)
 {
     extern int pad_is_two_players(void);
     uint32_t state = c->ecx;
-    if (getenv("ORR_INT_LOG") && !draw_only && frame_count % 300 == 0)
-        LOG(LOG_ALWAYS, "int: on %d hz %d two %d menu %d cam %x objs %d est %.2f since tick %.2f", int_on, int_hz, pad_is_two_players(), R8(state + 0xfdd), cam_seen, nints, int_frame_ms, mono_ms() - t_tick);
     if (draw_only || !int_on || deterministic_run() || pad_is_two_players() || R8(state + 0xfdd) || t_tick <= 0.0 || !cam_seen)
         return 0;
     double slot = 1000.0 / (double)(int_hz > 60 ? int_hz : 120), now = mono_ms();
@@ -357,6 +361,8 @@ static int race_draw_hook(CPU *c)
         double t0 = mono_ms();
         int_alpha = (float)((t0 + int_frame_ms - t_tick) * 0.06);
         int_alpha = int_alpha > 1.0f ? 1.0f : int_alpha;
+        if (getenv("ORR_INT_ALPHA"))
+            int_alpha = (float)atof(getenv("ORR_INT_ALPHA"));
         W32(0x5d1528 + 0x24, 0);
         W32(0x5d1528 + 0x2c, 0);
         W32(0x5d1528 + 0x30, 0);
@@ -421,14 +427,8 @@ static int view_draw_hook(CPU *c)
     static float yaw, pitch;
     static double stick_t;
     uint32_t vcam = R32(R32(c->esp + 4) + 4);
-    /* the camera's last two ticks, seen here as the drawing starts */
-    if (int_on && !draw_only) {
-        memcpy(cam_prev, cam_cur, sizeof cam_prev);
-        cam_read(vcam, cam_cur);
-        if (!cam_seen || cam_seen != vcam || far_apart(cam_prev + 12, cam_cur + 12, 800.0f))
-            memcpy(cam_prev, cam_cur, sizeof cam_prev);
-        cam_seen = vcam;
-    }
+    if (int_on)
+        cam_seen = vcam;        /* (the camera this race draws with: int_snapshot reads it) */
     double st_now = mono_ms();
     float st_dt = stick_t > 0.0 ? (float)(st_now - stick_t) : 16.67f;
     stick_t = st_now;
