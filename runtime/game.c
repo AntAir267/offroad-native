@@ -14,6 +14,7 @@
 #include "funcs.h"
 #include "gfx.h"
 #include "vk.h"
+#include "native_land.h"
 
 /* A camera's far plane, +0x250, comes through 0x4f1350 from the race's setup and again from the camera's own stored
    values, so a raised one comes back in. All of it must be raised together: the game clips every polygon at z 1 (renderer
@@ -134,17 +135,29 @@ static int car_available_hook(CPU *c)
     return 1;
 }
 
+/* A splash is 4 parts of 16 see-through sheets, of flecks over mostly nothing, about 72 splashes a car through a puddle: 25 screens
+   of overdraw, and the CPU clipping each sheet. Only one part of each is drawn now, chosen for the splash's life so nothing
+   flickers, and the renderer makes its flecks 4 times as strong (vk.c), so the look holds. The splash's life, its random numbers and
+   its sound are the game's: only the drawing changes. Part: +0xa0 + i * 0xf4 its live byte [verified: 0x4a2630]. */
+static int splash_draw_hook(CPU *c)
+{
+    uint32_t o = c->ecx;
+    int keep = (int)(((o >> 4) * 2654435761u) >> 30);
+    uint8_t live[4];
+    for (int i = 0; i < 4; i++) {
+        live[i] = R8(o + 0xa0 + (uint32_t)i * 0xf4);
+        if (i != keep)
+            W8(o + 0xa0 + (uint32_t)i * 0xf4, 0);
+    }
+    F_004a2630_orig(c);
+    for (int i = 0; i < 4; i++)
+        W8(o + 0xa0 + (uint32_t)i * 0xf4, live[i]);
+    return 1;
+}
+
 /* (timing only) */
 static int puddle_hit_hook(CPU *c)
 {
-    /* One splash in three: the game makes one per wheel per tick, and with what the sheets cost it to clip and us to draw the
-       frame went over its time, with Extreme worst (game CPU 12 ms, 21 in the spray) [verified: frame-trace.txt, Ant's play] */
-    static unsigned every;
-    if (every++ % 3) {
-        puddle_recent = frame_count;
-        api_return(c, 0, 6);
-        return 1;
-    }
     double t = mono_ms();
     F_0049fe30_orig(c);
     if (frame_count > puddle_recent + 30)
@@ -206,6 +219,11 @@ static void turn(uint32_t a, float cy, float sy, float cp, float sp, const float
 }
 static int view_draw_hook(CPU *c)
 {
+    {
+        extern void game_time_frame(void);
+        if (getenv("ORR_TIME_LOG"))
+            game_time_frame();
+    }
     extern int pad_axis_value(int axis), pad_is_two_players(void);
     static float yaw, pitch;
     float rx = (float)pad_axis_value(2) / 32768.0f, ry = (float)pad_axis_value(3) / 32768.0f;
@@ -273,6 +291,45 @@ static int view_draw_hook(CPU *c)
             W32(cam + at[i] + 4 * (uint32_t)k, saved[i * 4 + k]);
     W8(cam + 0x1d0, 0);
     return 1;
+}
+
+/* ORR_TIME_LOG=1: ms per frame of each piece, over the last 300 frames */
+enum { T_WORLD, T_WALK, T_LAND, T_FOG, T_SKY, T_SIM, T_N };
+static double t_sum[T_N];
+#define TIMED(name, id, fn)                                     \
+    static int name(CPU *c)                                     \
+    {                                                           \
+        double t0 = mono_ms();                                  \
+        fn(c);                                                  \
+        t_sum[id] += mono_ms() - t0;                            \
+        return 1;                                               \
+    }
+TIMED(time_world_hook, T_WORLD, F_0054ea20_orig)
+TIMED(time_walk_hook, T_WALK, native_walk_call)
+TIMED(time_land_hook, T_LAND, native_land_call)
+TIMED(time_fog_hook, T_FOG, native_fog_call)
+/* The clouds fan out to 3 x the far plane, split until no edge is over 3200 units [verified: 0x4ea330, 0x4e8250], so their
+   CPU cost goes with the far plane squared, and they end in the fog anyway: drawn for the game's own far plane. */
+static int time_sky_hook(CPU *c)
+{
+    double t0 = mono_ms();
+    uint32_t cam = R32(R32(c->esp + 4) + 4), far_now = R32(cam + 0x250);
+    union { float f; uint32_t u; } g = {RF32(cam + 0x250) / far_scale()};
+    W32(cam + 0x250, g.u);
+    F_004ea330_orig(c);
+    W32(cam + 0x250, far_now);
+    t_sum[T_SKY] += mono_ms() - t0;
+    return 1;
+}
+TIMED(time_sim_hook, T_SIM, F_004d7690_orig)
+void game_time_frame(void)
+{
+    static unsigned long n;
+    if (++n % 300 == 0) {
+        LOG(LOG_ALWAYS, "time: frame %lu sim %.2f world %.2f (walk %.2f land %.2f fog %.2f) sky %.2f", frame_count, t_sum[T_SIM] / 300, t_sum[T_WORLD] / 300,
+            t_sum[T_WALK] / 300, t_sum[T_LAND] / 300, t_sum[T_FOG] / 300, t_sum[T_SKY] / 300);
+        memset(t_sum, 0, sizeof t_sum);
+    }
 }
 
 static int puff_draw_hook(CPU *c)
@@ -383,12 +440,30 @@ static int puff_draw_hook(CPU *c)
     return 1;
 }
 
+/* The terrain's walk, land and fog: native_land.c does the whole call, or calls the original */
+static int walk_hook(CPU *c) { native_walk_call(c); return 1; }
+static int land_hook(CPU *c) { native_land_call(c); return 1; }
+static int fog_hook(CPU *c) { native_fog_call(c); return 1; }
+
 void game_init(void)
 {
     if (!widescreen_allowed())
         return;
+    native_land_init();
+    hook_terrain_walk = walk_hook;
+    hook_terrain_land = land_hook;
+    hook_terrain_fog = fog_hook;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    hook_splash_draw = splash_draw_hook;
+    hook_time_sky = time_sky_hook;
+    if (getenv("ORR_TIME_LOG")) {
+        hook_time_world = time_world_hook;
+        hook_terrain_walk = time_walk_hook;
+        hook_terrain_land = time_land_hook;
+        hook_terrain_fog = time_fog_hook;
+        hook_time_sim = time_sim_hook;
+    }
     hook_view_draw = view_draw_hook;
     extern int light_car_hook(CPU *c);
     hook_car_draw = light_car_hook;
