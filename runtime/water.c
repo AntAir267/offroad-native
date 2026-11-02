@@ -7,8 +7,8 @@
    +0x88 half size. Drawn by 0x4a0180, second pass 0x4a1360 (the sky through a stencil). Far ones, wholly outside the grid, stay the game's.
    The lake: cells flagged 2 at height 0; the game draws its surface only with view +0x38 bit 1, which it never sets [verified: 0x4d9340 clears it;
    0x5458c0]: set here, native_land.c, so the game's waves carry on past the grid.
-   Recovery (Ant asked to be told): a seep of a twentieth of what is missing each second, so a puddle driven through is 90% back in about 45 s,
-   half back in 14; water that left its place drains away slowly (a film 3 cm deep in 4 s) and the ground stays dark for 50 s more. */
+   Recovery (Ant asked to be told): a seep of a twentieth of what is missing each second plus 0.6 cm a second, so an emptied puddle 8 cm deep is half
+   back in 4.5 s and full in about 10; water that left its place drains away slowly (a film 3 cm deep in 4 s) and the ground stays dark for 50 s more. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

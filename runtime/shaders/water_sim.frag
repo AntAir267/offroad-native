@@ -212,7 +212,7 @@ void main()
     if (pc.m.w > 0.5) {
         float eta = h + g;
         if (rest > -1e8) {
-            /* back to its level: a seep, a twentieth of what is missing a second, and a little always */
+            /* back to its level: a seep, a twentieth of what is missing a second, and 0.6 cm a second */
             if (eta < rest)
                 h += min(rest - eta, (rest - eta) * 0.05 * DT + 0.01);
         }
