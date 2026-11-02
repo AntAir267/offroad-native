@@ -54,6 +54,7 @@ static const char *const help[][2] = {
     {"car_lights", "car_lights: on (headlights and taillights light what is around them at night and dusk, with baked_lighting) or off"},
     {"car_light_shadows", "car_light_shadows: on (the headlights cast ray-traced shadows of the scenery, where the graphics card traces rays) or off"},
     {"car_shadows", "car_shadows: on (cars cast shadows from the sun and from each other's headlights, with baked_lighting) or off"},
+    {"camera_stick", "camera_stick: on (the right stick swings the race camera round the car) or off"},
     {"map_lights", "map_lights: on (the lamps on the tracks light what is around them at night and dusk, baked with their shadows) or off"},
     {"night", "night: original, dark or darkest (with baked_lighting)"},
     {"streamer_mode", "streamer_mode: on hides the paint jobs with the Confederate flag; each loads the car's plain paint"},
@@ -80,7 +81,7 @@ static void write_template(const char *path)
 {
     static const char *const def[][2] = {
         {"display", "window"}, {"resolution", "native"}, {"widescreen", "on"}, {"antialiasing", "off"},
-        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"car_lights", "on"}, {"car_shadows", "on"}, {"car_light_shadows", "on"}, {"map_lights", "on"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
+        {"textures", "smooth"}, {"colour_precision", "high"}, {"ambient_occlusion", "on"}, {"volumetric_dust", "on"}, {"baked_lighting", "on"}, {"night", "original"}, {"car_lights", "on"}, {"camera_stick", "on"}, {"car_shadows", "on"}, {"car_light_shadows", "on"}, {"map_lights", "on"}, {"streamer_mode", "off"}, {"music_level", "7"}, {"engine_level", "10"}, {"effects_level", "10"}, {"draw_distance", "far"}, {"vsync", "on"},
         {"frame_limit", "off"}, {"render_thread", "on"}, {"rumble", "on"}, {"controller_deadzone", "6"},
         {NULL, NULL}};
     FILE *f = fopen(path, "w");

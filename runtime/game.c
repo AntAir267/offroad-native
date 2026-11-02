@@ -3,6 +3,7 @@
    Draw distance: VIDEO's Draw Distance row picks a far plane of 16000, 21000 or 26000 at the race's load
    (0x4d8630: 0x5d0e78), which the cameras take from there [verified: decompile]. The More Options row raises how
    far they cull: game_camera_set. */
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -38,12 +39,13 @@ float game_far(float far)
    goes to the volumetric renderer (vk.c, from 1nsane-native) in view space and the sprite is not drawn. That
    renderer reads a Direct3D view and projection, which this game does not use, so it gets a copy of the
    device's state with them made up from the camera (+0x178, +0x188: z = a + b / w; focal length 640). */
-static int dust_on, streamer_on;
+static int dust_on, streamer_on, stick_camera;
 
 void game_options(void)
 {
     dust_on = widescreen_allowed() && !strcasecmp(option_str("volumetric_dust", "on"), "on");
     streamer_on = !strcasecmp(option_str("streamer_mode", "off"), "on");
+    stick_camera = !strcasecmp(option_str("camera_stick", "on"), "on");
     extern void light_options(void), mix_options(void);
     light_options();
     mix_options();
@@ -186,6 +188,93 @@ static int texture_name_hook(CPU *c)
     return 0;
 }
 
+/* The right stick swings the camera round the car, for the drawing only: the stick's place is the angle, right to look
+   right, all the way over to look back; up looks down from above. The game's camera is put back after the view, as its
+   chase works from where it was. Camera: rows +0x4, +0x14, +0x24 (right, up, forward), position +0x44, the matrix of the
+   view cached until +0x1d0 is cleared [verified: 0x4f0c30, 0x4f0cb0]. The player's car: 0x4b15f0 of the view's number
+   0x5ce9c0, on [0x5d2550]+0x18, its position +0x54 [verified: 0x497d50, 0x52e300]. Not in a two-player race: both would turn. */
+static void turn(uint32_t a, float cy, float sy, float cp, float sp, const float *right)
+{
+    float v[3] = {RF32(a), RF32(a + 4), RF32(a + 8)};
+    float x = v[0] * cy + v[2] * sy, z = -v[0] * sy + v[2] * cy, y = v[1];
+    /* then up and over, about the camera's right */
+    float d = right[0] * x + right[1] * y + right[2] * z;
+    float cx = right[1] * z - right[2] * y, cyy = right[2] * x - right[0] * z, cz = right[0] * y - right[1] * x;
+    union { float f; uint32_t u; } o[3] = {{x * cp + cx * sp + right[0] * d * (1 - cp)}, {y * cp + cyy * sp + right[1] * d * (1 - cp)}, {z * cp + cz * sp + right[2] * d * (1 - cp)}};
+    for (int i = 0; i < 3; i++)
+        W32(a + 4 * (uint32_t)i, o[i].u);
+}
+static int view_draw_hook(CPU *c)
+{
+    extern int pad_axis_value(int axis), pad_is_two_players(void);
+    static float yaw, pitch;
+    float rx = (float)pad_axis_value(2) / 32768.0f, ry = (float)pad_axis_value(3) / 32768.0f;
+    float mag = sqrtf(rx * rx + ry * ry);
+    if (!stick_camera || pad_is_two_players() || mag < 0.18f)
+        rx = ry = 0.0f;
+    else {
+        rx *= (mag - 0.18f) / 0.82f / mag;
+        ry *= (mag - 0.18f) / 0.82f / mag;
+    }
+    yaw += (rx * 3.14159f - yaw) * 0.18f;
+    float want_p = ry < 0.0f ? -ry * 0.75f : -ry * 0.12f;
+    pitch += (want_p - pitch) * 0.18f;
+    if (fabsf(yaw) < 0.002f && fabsf(pitch) < 0.002f) {
+        yaw = pitch = 0.0f;
+        return 0;
+    }
+    uint32_t view = R32(c->esp + 4), cam = R32(view + 4), keep = c->ecx;
+    uint32_t saved[16];
+    static const uint32_t at[4] = {0x4, 0x14, 0x24, 0x44};
+    for (int i = 0; i < 4; i++)
+        for (int k = 0; k < 4; k++)
+            saved[i * 4 + k] = R32(cam + at[i] + 4 * (uint32_t)k);
+    c->ecx = R32(R32(0x5d2550) + 0x18);
+    uint32_t car = guest_call(c, 0x4b15f0, 1, R32(0x5ce9c0));
+    c->ecx = keep;
+    float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+    float px = RF32(cam + 0x44), py = RF32(cam + 0x48), pz = RF32(cam + 0x4c);
+    float qx = px, qy = py, qz = pz;
+    if (car) {
+        qx = RF32(car + 0x54);
+        qy = RF32(car + 0x58) + 60.0f;
+        qz = RF32(car + 0x5c);
+    }
+    /* (a camera in or on the car turns where it is) */
+    if ((px - qx) * (px - qx) + (pz - qz) * (pz - qz) < 300.0f * 300.0f) {
+        qx = px;
+        qy = py;
+        qz = pz;
+    }
+    /* the right vector after the yaw, for the pitch */
+    float r0 = RF32(cam + 4), r2 = RF32(cam + 0xc);
+    float right[3] = {r0 * cy + r2 * sy, RF32(cam + 8), -r0 * sy + r2 * cy};
+    float rl = sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+    for (int i = 0; i < 3 && rl > 0.0f; i++)
+        right[i] /= rl;
+    static uint32_t tmp;
+    if (!tmp)
+        tmp = galloc(16);
+    union { float f; uint32_t u; } u;
+    u.f = px - qx; W32(tmp, u.u);
+    u.f = py - qy; W32(tmp + 4, u.u);
+    u.f = pz - qz; W32(tmp + 8, u.u);
+    turn(tmp, cy, sy, cp, sp, right);
+    u.f = RF32(tmp) + qx; W32(cam + 0x44, u.u);
+    u.f = RF32(tmp + 4) + qy; W32(cam + 0x48, u.u);
+    u.f = RF32(tmp + 8) + qz; W32(cam + 0x4c, u.u);
+    turn(cam + 0x4, cy, sy, cp, sp, right);
+    turn(cam + 0x14, cy, sy, cp, sp, right);
+    turn(cam + 0x24, cy, sy, cp, sp, right);
+    W8(cam + 0x1d0, 0);
+    F_004daec0_orig(c);
+    for (int i = 0; i < 4; i++)
+        for (int k = 0; k < 4; k++)
+            W32(cam + at[i] + 4 * (uint32_t)k, saved[i * 4 + k]);
+    W8(cam + 0x1d0, 0);
+    return 1;
+}
+
 static int puff_draw_hook(CPU *c)
 {
     if (!dust_on || !vk_on())
@@ -300,6 +389,7 @@ void game_init(void)
         return;
     hook_puff_draw = puff_draw_hook;
     hook_frame_timer = frame_timer_hook;
+    hook_view_draw = view_draw_hook;
     extern int light_car_hook(CPU *c);
     hook_car_draw = light_car_hook;
     hook_car_available = car_available_hook;

@@ -146,6 +146,8 @@ static void send_all(void)
 }
 
 /* a two-player race starts (on) or the front end comes back (off): padgame.c */
+int pad_is_two_players(void) { return two_players; }
+
 void pad_two_players(int on)
 {
     LOG(LOG_INPUT, "two players: %d (frame %lu)", on, frame_count);

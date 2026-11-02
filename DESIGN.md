@@ -157,6 +157,8 @@ Car shadows: draw.frag car_box_hit, a soft ray-box test per car, from the sun an
 
 Menus: VIDEO > More Options (8 rows, and Lighting's button), its Lighting page (6 rows), AUDIO > More Options (3). 0x45ce10 names the button Escape and B press: only Backs now; More's being named made them loop (Ant).
 
+Right stick camera (More Options; game.c view_draw_hook): the stick's place is the angle, eased: right looks right, full over looks back, up rises to about 43 degrees, down dips 7. The camera is turned for the drawing and put back after the view, so the game's chase never sees it. A camera within 3 m of the car turns on the spot. Off in a two-player race (both would turn); per player later. Sound still follows the game's camera.
+
 Particle flicker where cars' clouds overlap (Ant found it): overlap passed the march's budget, so every puff's steps changed frame to frame and the farthest were dropped. Budget 10 to 40, coarsening eases in, dropping only at 3 times over, ties in the sort broken by serial (vk.c). Not seen by me with cars overlapping: needs Ant's word.
 
 Countdown: laid out right of the middle by the game (centres 525 and 558 of 1024); centred in vk.c by its size and place. [verified: frames, 3, 2, 1, GO]
