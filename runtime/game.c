@@ -227,6 +227,7 @@ static int nints;
 static float cam_prev[16], cam_cur[16];
 static uint32_t cam_seen;
 static int draw_only;
+static uint32_t clip_saved[6];
 static double t_tick;
 static float int_alpha = 1.0f, tick_t;
 /* how long a draw-only frame takes, watched so one never makes the normal frame late */
@@ -257,7 +258,9 @@ static void cam_write(uint32_t cam, const float *m)
             union { float f; uint32_t u; } u = {m[i * 4 + k]};
             W32(cam + cam_at[i] + 4 * (uint32_t)k, u.u);
         }
+    /* (the matrices made from them, each cached until cleared [verified: 0x4f03b0, 0x4f0cb0]) */
     W8(cam + 0x1d0, 0);
+    W8(cam + 0xcc, 0);
 }
 /* rows blended and made unit length again, the position blended; (a cut, a respawn: no blend) */
 static void mix_rows(float *o, const float *a, const float *b, float t, int rows)
@@ -317,6 +320,10 @@ static void int_snapshot(void)
         if (far_apart(cam_prev + 12, cam_cur + 12, 800.0f))
             memcpy(cam_prev, cam_cur, sizeof cam_prev);
     }
+    /* (the renderer's clip rectangle as the update leaves it: the HUD's drawing changes it, and only the update puts it back:
+       a draw-only frame without this drew the world in the middle of the picture) */
+    for (int i = 0; i < 6; i++)
+        clip_saved[i] = R32(0x5d27b8 + 0x3ec + 4 * (uint32_t)i);
     t_tick = mono_ms();
 }
 void game_level_loaded(void)
@@ -367,6 +374,8 @@ static int race_draw_hook(CPU *c)
         W32(0x5d1528 + 0x2c, 0);
         W32(0x5d1528 + 0x30, 0);
         draw_only = 1;
+        for (int i = 0; i < 6; i++)
+            W32(0x5d27b8 + 0x3ec + 4 * (uint32_t)i, clip_saved[i]);
         c->ecx = state;
         guest_call(c, 0x4d6be0, 1, arg);
         guest_call(c, 0x4fc450, 0);
@@ -377,6 +386,8 @@ static int race_draw_hook(CPU *c)
         int_frame_ms += (mono_ms() - t0 - int_frame_ms) * 0.1;
         when += slot;
     }
+    for (int i = 0; i < 6; i++)
+        W32(0x5d27b8 + 0x3ec + 4 * (uint32_t)i, clip_saved[i]);
     int_frame_ms *= 0.998;         /* (one slow one must not stop them for good) */
     int_alpha = 1.0f;
     c->ecx = state;
@@ -506,11 +517,13 @@ static int view_draw_hook(CPU *c)
     turn(cam + 0x14, cy, sy, cp, sp, right);
     turn(cam + 0x24, cy, sy, cp, sp, right);
     W8(cam + 0x1d0, 0);
+    W8(cam + 0xcc, 0);
     F_004daec0_orig(c);
     for (int i = 0; i < 4; i++)
         for (int k = 0; k < 4; k++)
             W32(cam + at[i] + 4 * (uint32_t)k, saved[i * 4 + k]);
     W8(cam + 0x1d0, 0);
+    W8(cam + 0xcc, 0);
     if (draw_only) {
         cam_write(vcam, cam_cur);
         int_apply(1);
