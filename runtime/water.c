@@ -26,7 +26,7 @@
 #define MAX_PUD 8
 
 static uint32_t pud_all[MAX_PUD];
-static int pud_n;
+static int pud_n, pud_new;
 static int water_log;
 static int water_on = -1, image = 512, recover = 1;
 static unsigned tick_steps;
@@ -143,7 +143,8 @@ void water_view(const float *eye, const float *forward, const uint32_t *cars, in
         LOG(LOG_ALWAYS, "water view: on %d ticks %u puddles %d", water_on, tick_steps, pud_n);
     if (!enabled())
         return;
-    if (level_new) {
+    if (level_new || pud_new) {
+        pud_new = 0;
         have_rect = 0;
         org_ok = 0;
         memset(&st, 0, sizeof st);
@@ -334,15 +335,18 @@ static int is_ours(uint32_t o)
     return 0;
 }
 
-/* a level loading (game.c); each puddle as it is made, 0x4a1710 (ret 0x14; ECX it) */
-void water_level(void)
-{
-    pud_n = 0;
-}
+/* each puddle as it is made, 0x4a1710 (ret 0x14; ECX it) */
 int puddle_init_hook(CPU *c)
 {
     uint32_t o = c->ecx;
     F_004a1710_orig(c);
+    /* (a level's are all made in one frame; a restart makes new ones and goes on: the old are gone) */
+    static unsigned long batch;
+    if (batch != frame_count) {
+        batch = frame_count;
+        pud_n = 0;
+        pud_new = 1;
+    }
     if (pud_n < MAX_PUD)
         pud_all[pud_n++] = o;
     if (getenv("ORR_WATER_LOG"))

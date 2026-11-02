@@ -109,10 +109,6 @@ static int frame_timer_hook(CPU *c)
    day, sunset or night, rain or snow: +0, +4 of the settings [verified: 0x4d9c30] */
 static int level_load_hook(CPU *c)
 {
-    {
-        extern void water_level(void);
-        water_level();
-    }
     const char *l = getenv("ORR_RACE_LOOK");
     if (l) {
         uint32_t st = R32(c->esp + 4);
@@ -328,8 +324,9 @@ static void int_snapshot(void)
     for (int i = 0; i < n; i++) {
         int_note_object(cars[i]);
         uint32_t nw = R32(cars[i] + 0x500);
-        for (uint32_t w = 0; w < nw && w < 8; w++)
-            int_note_object(R32(R32(cars[i] + 0x508) + 4 * w));
+        uint32_t wl = R32(cars[i] + 0x508);
+        for (uint32_t w = 0; wl && w < nw && w < 8; w++)
+            int_note_object(R32(wl + 4 * w));
     }
     if (cam_seen) {
         memcpy(cam_prev, cam_cur, sizeof cam_prev);
@@ -354,8 +351,18 @@ static int race_update_hook(CPU *c)
         api_return(c, 1, 0);
         return 1;
     }
+    /* A race restarting runs its first update from inside this one (0x4d7d00, 0x4d7510), the old cars going meanwhile: nothing remembered of
+       them may be touched again, or written: Ant's crash on Restart [verified: his log's stack, reproduced with in-between frames on]. */
+    static int depth;
+    if (depth) {
+        extern void light_cars_forget(void);
+        light_cars_forget();
+        game_level_loaded();
+    }
     double t0 = mono_ms();
+    depth++;
     F_004d7690_orig(c);
+    depth--;
     t_sum[T_SIM] += mono_ms() - t0;
     if ((int)R32(0x5d1528 + 0x30) > 0) {
         extern void water_tick(void);

@@ -266,6 +266,7 @@ static void load(void)
 /* Car lights: the cars the race has drawn, whose matrices are read at the start of each view (the terrain draws before them).
    The object's matrix: three rows of four floats, then the position [verified: 0x52e300, 0x49b300]. */
 const uint32_t *light_cars(int *n) { *n = ncars; return cars; }
+void light_cars_forget(void) { ncars = 0; }
 
 int light_car_hook(CPU *c)
 {

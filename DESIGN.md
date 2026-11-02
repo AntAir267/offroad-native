@@ -165,6 +165,10 @@ Water simulation (Lighting > Water, Simulated by default, Original the game's; L
 
 Fog (Lighting > Fog, Off by default, Original): game.c fog_*. The land's overlay skipped and the fog object's start set to 4 x far from the land on, mist bit off, so nothing has any; the sky keeps the real values (without them its horizon is a black band: first try nulled the object). Time hooks for world and fog are always installed now (they were only under ORR_TIME_LOG, which hid this).
 
+Restart crash (Ant, fixed 2026-11-02): Restart runs a race's first update from inside the old one (0x4d7690 > 0x4d7d00 > 0x4d7510 > 0x4d7690), the cars going meanwhile; int_snapshot read a car whose wheel list was 0. Only with in-between frames on (a screen over 60 Hz or Frame Rate over 60), so --test never sees it. A nested update now forgets the car list and interpolation records. Test: REAL=1 race.sh with STEER="300:ESC,420:DOWN,470:UP,540:ENTER,660:ENTER" and --option frame_rate=144. Puddles: a new batch of 0x4a1710 calls replaces the list and resets the grid.
+
+Real-time numbers, Challenge with 4 cars, Everglade sunset, 1440p, Extreme, 890M, Frame Rate 144, other jobs on the machine (load 5): anti-aliasing off GPU 7.31 ms mean, 10.85 p99, 128 fps, game CPU world 5.28; anti-aliasing 4x (5120 x 2880) GPU 30.32 mean, 41.82 p99, 32 fps: Ant's whole race ran at this, about 30 fps (his log's frame numbers against time; the slow-frame log stops at 400 lines).
+
 Blocky ground (Ant): the terrain's blended passes were lit by their 5 m corners next to pixels lit per pixel (the spray-saving mode 6): now only small (64 x 64 or less) textures.
 
 All of it together, Extreme, night, Darkest off, 1440p on the 890M, Everglade through a puddle, one car: game CPU 4.4 ms mean, 9.5 max, none over 16.7 (was 7.6 and 22); GPU 5.5 mean, 8.9 max (was 24 at the peak).
