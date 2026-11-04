@@ -19,6 +19,7 @@
 #include <string.h>
 #include <strings.h>
 #include "runtime.h"
+#include "vk.h"
 #include "options.h"
 #include "widescreen.h"
 #include "funcs.h"
@@ -43,7 +44,7 @@
 typedef struct {
     const char *key, *default_value, *label, *hint;
     int n;
-    const char *text[4], *value[4];
+    const char *text[8], *value[8];
     uint32_t items, cell;
     int shown;
     int audio;                         /* its page: 0 VIDEO's More Options, 1 AUDIO's (n is then how many steps, the value 0..n-1), 2 Lighting */
@@ -51,7 +52,8 @@ typedef struct {
 
 static Row rows[] = {
     {"widescreen", "on", "Widescreen", "Turn Widescreen On or Off", 2, {"Off", "On"}, {"off", "on"}, 0, 0, 0, 0},
-    {"antialiasing", "off", "Anti-Aliasing", "Smoother Edges - Asks More Of The Graphics Card", 2, {"Off", "4x"}, {"off", "4x"}, 0, 0, 0, 0},
+    {"antialiasing", "off", "Anti-Aliasing", "Smoother Edges - FXAA And TAA Cost Little, 2x And 4x The Most", 7, {"Off", "FXAA", "TAA", "FSR 2", "DLSS", "2x", "4x"}, {"off", "fxaa", "taa", "fsr", "dlss", "2x", "4x"}, 0, 0, 0, 0},
+    {"render_scale", "native", "Render Scale", "TAA, FSR 2 And DLSS Can Draw Smaller And Scale Up", 5, {"Native", "Quality", "Balanced", "Performance", "Auto"}, {"native", "quality", "balanced", "performance", "auto"}, 0, 0, 0, 0},
     {"textures", "smooth", "Texture Filtering", "Sharper Textures At A Distance", 2, {"Original", "Smooth"}, {"original", "smooth"}, 0, 0, 0, 0},
     {"colour_precision", "high", "Colour Precision", "Less Banding In The Sky And Fog", 2, {"Original", "High"}, {"original", "high"}, 0, 0, 0, 0},
     {"draw_distance", "far", "Far Draw Distance", "See Further - From The Next Race", 3, {"Original", "Far", "Extreme"}, {"original", "far", "extreme"}, 0, 0, 0, 0},
@@ -77,7 +79,7 @@ static Row rows[] = {
 
 static uint32_t row_id(int i) { return i < 8 ? ROW_FIRST + (uint32_t)i : ROW_MORE + (uint32_t)(i - 8); }
 static int row_of(uint32_t id) { return id >= ROW_MORE ? (int)(id - ROW_MORE) + 8 : (int)id - (int)ROW_FIRST; }
-/* (its place among its page's rows, ten on the page: closer) */
+/* (its place among its page's rows, the more on the page the closer) */
 static float fl_y(int i)
 {
     int place = 0, total = 0;
@@ -86,7 +88,7 @@ static float fl_y(int i)
             place += k < i;
             total++;
         }
-    return 90.0f + (total > 9 ? 29.0f : total > 8 ? 32.0f : total > 7 ? 36.0f : 40.0f) * (float)place;
+    return 90.0f + (total > 10 ? 26.0f : total > 9 ? 29.0f : total > 8 ? 32.0f : total > 7 ? 36.0f : 40.0f) * (float)place;
 }
 static uint32_t fu(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
@@ -310,6 +312,21 @@ static int video_rows_hook(CPU *c)
     help_back_light = gstrdup("Return To More Options");
     for (int i = 0; i < NROWS; i++) {
         Row *r = &rows[i];
+        /* (anti-aliasing: only what this machine can run) */
+        if (!strcmp(r->key, "antialiasing"))
+            for (int k = 0; k < r->n; k++) {
+                const char *v = r->value[k];
+                int can = !strcmp(v, "dlss") ? vk_dlss_available() : !strcmp(v, "fsr") ? vk_taa_available()
+                        : !strcmp(v, "taa") ? vk_own_taa_available() : !strcmp(v, "fxaa") ? vk_hp_available() : 1;
+                if (!can) {
+                    for (int m = k; m + 1 < r->n; m++) {
+                        r->text[m] = r->text[m + 1];
+                        r->value[m] = r->value[m + 1];
+                    }
+                    r->n--;
+                    k--;
+                }
+            }
         r->items = galloc((uint32_t)r->n * 8);
         for (int k = 0; k < r->n; k++) {
             char num[8];

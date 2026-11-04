@@ -58,7 +58,7 @@ typedef struct Block {
 typedef struct { uint32_t type, size; } Cmd;     /* size: of the whole command, header included */
 
 enum { C_CTX, C_STATE, C_DRAW, C_DRAW_TNL, C_DRAW_INST, C_CLEAR, C_FILL, C_BLT, C_PRESENT, C_FAR_DRAW, C_SH_BEGIN, C_SH_CLASS,
-       C_SH_END, C_LI_LOAD, C_LI_VIEW, C_LI_CARS, C_WAT_STEP, C_WAT_DRAW, C_SM_BEGIN, C_SM_END, C_SM_TAKE, C_SC_BEGIN, C_SC_CAMERA, C_SC_CLASS, C_SC_END, C_FLIP };
+       C_SH_END, C_LI_LOAD, C_LI_VIEW, C_LI_CARS, C_WAT_STEP, C_WAT_DRAW, C_SM_BEGIN, C_SM_END, C_SM_TAKE, C_SC_OBJ, C_SC_BEGIN, C_SC_CAMERA, C_SC_CLASS, C_SC_END, C_FLIP };
 
 static int on;                          /* the render thread runs */
 static int tried;
@@ -425,6 +425,7 @@ static void run(const Cmd *c)
     case C_SC_BEGIN: vkr_scene_begin((const VkScene *)p); break;
     case C_SC_CAMERA: vkr_scene_camera((const VkScene *)p); break;
     case C_SC_CLASS: vkr_scene_class(*(const int *)p); break;
+    case C_SC_OBJ: vkr_scene_object(*(const int *)p ? (const float *)p + 1 : NULL); break;
     case C_SC_END: vkr_scene_end(); break;
     case C_FLIP: {
         Surface *s, *t;
@@ -1113,6 +1114,20 @@ void vk_scene_class(int cls)
         return;
     }
     put_int(C_SC_CLASS, cls);
+}
+
+void vk_scene_object(const float *m)
+{
+    if (!going()) {
+        vkr_scene_object(m);
+        return;
+    }
+    Cmd *c = put(C_SC_OBJ, sizeof(Cmd) + 17 * sizeof(float));
+    int *q = (int *)(c + 1);
+    q[0] = m != NULL;
+    if (m)
+        memcpy(q + 1, m, 16 * sizeof(float));
+    publish();
 }
 
 void vk_scene_end(void)

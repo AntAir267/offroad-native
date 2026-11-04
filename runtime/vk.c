@@ -411,6 +411,12 @@ static struct {
     float jx, jy;                 /* this scene's jitter (scene pixels) and in Vulkan clip space per w */
     float jndc[2];
     int cls;                      /* VK_SC_* of the next draws */
+    /* pretransformed worlds (Off-Road: the game hands the renderer screen x, y, z and w; taa.c): the game's world ->
+       its screen (x w, y w, z w, w) this scene and the previous one, the camera's position, and the move of the thing
+       being drawn (world now -> world then, row vectors) */
+    double G[16], pG[16], gcam[3], pgcam[3], obj[16];
+    Surface *want;                /* the target the scene is for (NULL: the first drawn into) */
+    int have_g, prev_g, have_obj;
     int sc[4];                    /* where it drew (scene pixels) */
     unsigned long last;           /* nframes of the last scene resolved */
     double t_last;                /* ... its time (FSR 2's frame time) */
@@ -540,6 +546,7 @@ static int res_native;
 static float res_fixed = 1.0f, res_scale = 1.0f;
 static float res_aa = 1.0f;          /* "antialiasing = 4x": render at twice the size each way */
 static int aa_temporal;              /* "antialiasing = fsr": temporal anti-aliasing (the scene: vk_scene_begin) */
+static int aa_fxaa;                  /* "antialiasing = fxaa": the scene, at the back buffer's size, through FXAA (taa.frag) on its way there */
 static int hp_want;                  /* "colour_precision = high": the scene drawn with 16 bits a channel (hp_format),
                                         dithered into the 8-bit back buffer at its end (the section "colour precision") */
 static VkFormat hp_format;           /* ... its colour format (VK_FORMAT_UNDEFINED: the device cannot blend one) */
@@ -836,12 +843,13 @@ void vkr_options(void)
     else if (strcasecmp(res, "original"))
         LOG(LOG_ALWAYS, "options: resolution \"%s\" is not original, native or a number", res);
     const char *aa = option_str("antialiasing", "off");
-    res_aa = !strcasecmp(aa, "4x") ? 2.0f : 1.0f;
+    res_aa = !strcasecmp(aa, "4x") ? 2.0f : !strcasecmp(aa, "2x") ? 1.41421356f : 1.0f;
+    aa_fxaa = !strcasecmp(aa, "fxaa");
     aa_dlss = !strcasecmp(aa, "dlss");
     aa_own = !strcasecmp(aa, "taa");
     aa_temporal = !strcasecmp(aa, "fsr") || aa_dlss || aa_own;
-    if (!aa_temporal && res_aa < 1.5f && strcasecmp(aa, "off"))
-        LOG(LOG_ALWAYS, "options: antialiasing \"%s\" is not off, 4x, taa, fsr or dlss", aa);
+    if (!aa_temporal && !aa_fxaa && res_aa < 1.2f && strcasecmp(aa, "off"))
+        LOG(LOG_ALWAYS, "options: antialiasing \"%s\" is not off, fxaa, taa, fsr, dlss, 2x or 4x", aa);
     const char *rsc = option_str("render_scale", "native");
     int was_auto = rs_auto;
     rs_auto = !strcasecmp(rsc, "auto");
@@ -2946,6 +2954,13 @@ static int init(void)
                                             .runtimeDescriptorArray = VK_TRUE,
                                             .descriptorBindingPartiallyBound = VK_TRUE,
                                             .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE};
+    {
+        /* (FSR 2's barriers on the scene's depth name its depth alone, the stencil apart: allowed with this, Vulkan 1.2 core) */
+        VkPhysicalDeviceVulkan12Features have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceFeatures2 f2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have};
+        vkGetPhysicalDeviceFeatures2(phys, &f2);
+        f12.separateDepthStencilLayouts = have.separateDepthStencilLayouts;
+    }
     VkPhysicalDeviceVulkan13Features f13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                             .pNext = &f12, .dynamicRendering = VK_TRUE, .synchronization2 = VK_TRUE,
                                             .shaderDemoteToHelperInvocation = VK_TRUE};   /* discard in draw.frag */
@@ -6762,6 +6777,9 @@ static int scene_images(GpuImg *c, GpuImg *z)
             vkDeviceWaitIdle(dev);    /* (FSR 2's or DLSS's context is made again) */
         tc_view_free();
         GpuImg **old[] = {&scn.c, &scn.z, &scn.vel, &scn.mask, &scn.out, &scn.hist[0], &scn.hist[1]};
+        /* (TAA's history: in the 16-bit scene's format. As R16G16B16A16_SFLOAT, drawn into, the 890M's ring timed out
+           every time, a GPU reset [verified: 2026-11-04, five runs; one colour fetch alone did it; the 16-bit unorm format
+           runs]) */
         for (int i = 0; i < (resize ? 4 : 7); i++)      /* (resized: the outputs, the back buffer's size, kept) */
             if (*old[i]) {
                 img_discard(*old[i]);
@@ -6778,8 +6796,8 @@ static int scene_images(GpuImg *c, GpuImg *z)
             scn.mask = img_new(K_AUX, w, h, 1, MASK_FORMAT, u);
             if (!resize && aa_own)
                 for (int i = 0; i < 2; i++)
-                    scn.hist[i] = img_new(K_AUX, c->w, c->h, 1, UPS_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                                                            VK_IMAGE_USAGE_SAMPLED_BIT);
+                    scn.hist[i] = img_new(K_AUX, c->w, c->h, 1, hp_format ? hp_format : UPS_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                                                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
             else if (!resize)
                 scn.out = img_new(K_AUX, c->w, c->h, 1, UPS_FORMAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT);   /* (DLSS clears it) */
@@ -6855,8 +6873,11 @@ static int scene_images(GpuImg *c, GpuImg *z)
    sets them up: cleared, the frame's jitter); 0 if it goes where it was going */
 static int scene_target(GpuImg **c, GpuImg **z, const D3DState *st)
 {
-    (void)st;
     if (!scn.drawn) {
+        if (scn.want && st->rt != scn.want)
+            return 0;
+        if (taa_log)
+            LOG(LOG_ALWAYS, "vk: scene %lu on %ux%u (%p), z %p", nframes, (*c)->w, (*c)->h, (void *)*c, (void *)*z);
         if (!scene_images(*c, *z)) {
             scn.active = 0;
             return 0;
@@ -6902,6 +6923,11 @@ static int scene_target(GpuImg **c, GpuImg **z, const D3DState *st)
             scn.d[k] = scn.prev_ok ? (double)(int32_t)((uint32_t)scn.cam[k] - (uint32_t)scn.pcam[k]) / 65536.0 : 0.0;
         scn.sc[0] = scn.sc[1] = 1 << 30;
         scn.sc[2] = scn.sc[3] = -(1 << 30);
+        if (scn.want) {           /* (a game that names its target: its main view is all of it, Off-Road's race) */
+            scn.sc[0] = scn.sc[1] = 0;
+            scn.sc[2] = (int)scn.c->w;
+            scn.sc[3] = (int)scn.c->h;
+        }
         scn.drawn = 1;
     }
     if (*c != scn.dst)
@@ -6979,8 +7005,44 @@ static void scene_motion(const D3DState *st, PushDraw *pc, const TnlConst *k, co
     D[14] = scn.d[2];
     m4_place(Pl, pl0, 0, 0);
     int placed = 0;               /* a model put in the world by a matrix (not built each frame by the CPU) */
-    if (pretransformed) {
-        /* screen-space vertices (none in the race's view so far): no motion, only the jitter taken off */
+    double invG[16], invPlJ[16], PlJ0[16], GS[16], pGS[16], S[16];
+    m4_place(PlJ0, pl0, scn.jndc[0], scn.jndc[1]);
+    if (pretransformed && scn.have_g && scn.prev_g && scn.dst) {
+        /* the game's screen (x w, y w, z w, w) -> Vulkan's clip, as draw_impl places its vertices (and the water) */
+        GpuImg *c = scn.dst;
+        float x0 = ui_x(c, 0.5f), x1 = ui_x(c, 1.5f), PW = (float)c->w, H = (float)c->lh;
+        m4_ident(S);
+        S[0] = 2.0f * (x1 - x0) / PW;
+        S[12] = 2.0f * (x0 - 0.5f * (x1 - x0)) / PW - 1.0f;
+        S[5] = 2.0f / H;
+        S[13] = 1.0f / H - 1.0f;
+        m4_mul(GS, scn.G, S);
+        m4_mul(pGS, scn.pG, S);
+    }
+    if (pretransformed && scn.have_g && scn.prev_g && scn.dst && inverse4(GS, invG) && inverse4(PlJ0, invPlJ)) {
+        /* screen-space vertices (Off-Road's whole world): this frame's clip position -> the game's screen -> the world (the
+           game's own matrix backwards) -> where it was (a car: its move; the sky: with the camera) -> the previous frame's
+           screen -> clip [verified: z = a + b / w is linear in the homogeneous (z w, w), so one 4 x 4 matrix does it] */
+        double Dl[16], A[16];
+        m4_ident(Dl);
+        if (sky)
+            for (int i = 0; i < 3; i++)
+                Dl[12 + i] = scn.pgcam[i] - scn.gcam[i];
+        else if (scn.have_obj)
+            memcpy(Dl, scn.obj, sizeof Dl);
+        m4_mul(A, invPlJ, invG);
+        m4_mul(A, A, Dl);
+        m4_mul(A, A, pGS);
+        m4_mul(M, A, Pl);
+        static unsigned long logged;
+        if (taa_log && nframes % 120 == 0 && logged != nframes) {
+            logged = nframes;
+            LOG(LOG_ALWAYS, "vk: motion %lu sky %d obj %d: M row0 %.4f %.4f %.4f %.4f row3 %.4f %.4f %.4f %.4f; G-pG %.3g; pl0 %.4f %.4f %.4f %.4f %.4f %.4f",
+                nframes, sky, scn.have_obj, M[0], M[1], M[2], M[3], M[12], M[13], M[14], M[15],
+                fabs(scn.G[0] - scn.pG[0]) + fabs(scn.G[12] - scn.pG[12]) + fabs(scn.G[15] - scn.pG[15]), pl0[0], pl0[1], pl0[2], pl0[3], pl0[4], pl0[5]);
+        }
+    } else if (pretransformed) {
+        /* screen-space vertices without the game's matrix: no motion, only the jitter taken off */
         m4_ident(M);
         M[12] = -scn.jndc[0];
         M[13] = -scn.jndc[1];
@@ -7153,7 +7215,7 @@ int vk_taa_on(void)
 /* the main view goes into the scene's images: for FSR 2 or DLSS, or for "colour_precision = high" alone */
 static int scene_wanted(void)
 {
-    return (taa_can() && aa_temporal) || (hp_want && hp_format);
+    return (taa_can() && aa_temporal) || (hp_want && hp_format) || (aa_fxaa && hp_format);
 }
 
 int vk_scene_on(void)
@@ -7177,6 +7239,26 @@ void vkr_scene_begin(const VkScene *s)
     scn.have_vp = 0;
     scn.cls = VK_SC_OBJECT;
     memcpy(scn.cam, s->cam, sizeof scn.cam);
+    scn.have_obj = 0;
+    scn.want = s->rt;
+    scn.have_g = s->g[15] != 0.0f || s->g[11] != 0.0f;
+    if (scn.have_g) {
+        for (int i = 0; i < 16; i++)
+            scn.G[i] = s->g[i];
+        for (int i = 0; i < 3; i++)
+            scn.gcam[i] = s->eye[i];
+        /* a camera of its own for what FSR 2 asks (near, far, angle) and so that the scene has one: D3D's */
+        double n = s->near_far[0] > 1.0f ? s->near_far[0] : 10.0, fa = s->near_far[1] > n ? s->near_far[1] : n * 1000.0;
+        double t = tan((s->fov_y > 0.05f ? s->fov_y : 1.0f) * 0.5);
+        memset(scn.P, 0, sizeof scn.P);
+        scn.P[0] = scn.P[5] = 1.0 / t;
+        scn.P[10] = fa / (fa - n);
+        scn.P[11] = 1.0;
+        scn.P[14] = -n * fa / (fa - n);
+        memset(scn.V, 0, sizeof scn.V);
+        scn.V[0] = scn.V[5] = scn.V[10] = scn.V[15] = 1.0;
+        scn.have_vp = 1;
+    }
     if (scn.last + 1 != nframes)  /* (no scene in the previous frame: nothing to reproject) */
         scn.prev_ok = 0;
     if (!scn.prev_ok)
@@ -7198,6 +7280,15 @@ void vkr_scene_camera(const VkScene *s)
 void vkr_scene_class(int cls)
 {
     scn.cls = cls;
+}
+
+/* the next draws' move since the previous scene (world now -> world then, row vectors, 16; NULL: still) */
+void vkr_scene_object(const float *m)
+{
+    scn.have_obj = m != NULL;
+    if (m)
+        for (int i = 0; i < 16; i++)
+            scn.obj[i] = m[i];
 }
 
 static VkPipeline taa_pipeline(VkFormat depth)
@@ -7233,6 +7324,13 @@ _Static_assert(sizeof(PushTaa) <= sizeof(PushDraw), "push constant range");
    there. */
 static void taa_copy(GpuImg *c, GpuImg *z, GpuImg *src, int mode, int alpha, float sharp)
 {
+    if (scn.want && z) {          /* (Off-Road clears its depth inside the view, into the scene's: the back buffer's is cleared here) */
+        end_rendering();
+        barrier(z, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkClearDepthStencilValue one = {1.0f, 0};
+        VkImageSubresourceRange zr = {z->aspect, 0, 1, 0, 1};
+        vkCmdClearDepthStencilImage(cb, z->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &one, 1, &zr);
+    }
     int same = src->w == c->w && src->h == c->h;
     int dither = mode == 0 && hp_dither && scn.c->format != RT_FORMAT && c->format == RT_FORMAT && noise_sync();
     begin_rendering(c, z);
@@ -7249,7 +7347,7 @@ static void taa_copy(GpuImg *c, GpuImg *z, GpuImg *src, int mode, int alpha, flo
     y1 = y1 > (int)c->h ? (int)c->h : y1;
     VkRect2D r = {{x0, y0}, {(uint32_t)(x1 > x0 ? x1 - x0 : 0), (uint32_t)(y1 > y0 ? y1 - y0 : 0)}};
     vkCmdSetScissor(cb, 0, 1, &r);
-    PushTaa p = {{1.0f / (float)c->w, 1.0f / (float)c->h, 0, 0}, {src->slot, same ? smp_nearest : smp_linear, mode,
+    PushTaa p = {{1.0f / (float)c->w, 1.0f / (float)c->h, 0, 0}, {src->slot, same && mode != 4 ? smp_nearest : smp_linear, mode,
                  scn.c->slot}, {40.0f, same ? sharp : 0.0f, 0, 0}, {dither ? noise_img->slot : -1, alpha, 0, 0}};
     vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof p, &p);
     vkCmdDraw(cb, 3, 1, 0, 0);
@@ -7267,20 +7365,20 @@ typedef struct {
 } PushTaau;
 _Static_assert(sizeof(PushTaau) <= sizeof(PushDraw), "push constant range");
 
-static VkPipeline taau_pipeline(void)
+static VkPipeline taau_pipeline(VkFormat fmt)
 {
     uint32_t key = 0x10000001u;
     for (int i = 0; i < npipes; i++)
-        if (pipes[i].key == key)
+        if (pipes[i].key == key && pipes[i].color == fmt)
             return pipes[i].p;
     if (npipes == COUNT(pipes))
         fatal("Vulkan: too many pipelines");
     Pipe *p = &pipes[npipes++];
     p->key = key;
     p->depth = VK_FORMAT_UNDEFINED;
-    p->color = UPS_FORMAT;
+    p->color = fmt;
     p->p = pipeline_create(sm_pv, sm_taau, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 0, VK_BLEND_FACTOR_ONE,
-                           VK_BLEND_FACTOR_ZERO, UPS_FORMAT, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
+                           VK_BLEND_FACTOR_ZERO, fmt, VK_FORMAT_UNDEFINED, 0, 0, 0, 0);
     return p->p;
 }
 
@@ -7302,7 +7400,7 @@ static GpuImg *taau_dispatch(void)
     GpuImg *h = scn.hist[scn.hcur], *last = scn.hist[scn.hcur ^ 1];
     barrier(last, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     begin_rendering(h, NULL);
-    bind_pipeline(taau_pipeline());
+    bind_pipeline(taau_pipeline(h->format));
     VkViewport vp = {0, 0, (float)h->w, (float)h->h, 0, 1};
     VkRect2D r = {{0, 0}, {h->w, h->h}};
     vkCmdSetViewport(cb, 0, 1, &vp);
@@ -7336,8 +7434,8 @@ void vkr_scene_end(void)
     if (timed)
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, st_queries, tsb + 9);
     barrier(scn.c, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    if (!scn.fsr) {               /* "colour_precision = high" alone: the same size, pixel for pixel, with its alpha */
-        taa_copy(c, scn.dz, scn.c, 0, 1, 0.0f);
+    if (!scn.fsr) {               /* "colour_precision = high" alone: the same size, pixel for pixel, with its alpha; FXAA on the way */
+        taa_copy(c, scn.dz, scn.c, aa_fxaa ? 4 : 0, 1, 0.0f);
         if (timed) {
             vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, st_queries, tsb + 10);
             f->taa_timed = 1;
@@ -7381,7 +7479,7 @@ void vkr_scene_end(void)
             .mv_scale_x = (float)scn.c->w, .mv_scale_y = (float)scn.c->h,
             .frame_ms = (float)(ms < 1.0 ? 1.0 : ms > 100.0 ? 100.0 : ms), .sharpness = taa_sharp,
             .cam_near = (float)n, .cam_far = (float)fa,
-            .fov_y = scn.P[5] > 0 ? (float)(2.0 * atan(1.0 / scn.P[5])) : 1.0f, .metres = 66.67f,
+            .fov_y = scn.P[5] > 0 ? (float)(2.0 * atan(1.0 / scn.P[5])) : 1.0f, .metres = 100.0f,
             .reset = scn.reset || !scn.prev_ok};
 #ifdef HAVE_DLSS
         if (aa_dlss) {                            /* (NGX checks the views' own formats) */
@@ -7411,6 +7509,9 @@ void vkr_scene_end(void)
         f->taa_timed = 1;
     }
     /* this scene is the next one's previous */
+    memcpy(scn.pG, scn.G, sizeof scn.G);
+    memcpy(scn.pgcam, scn.gcam, sizeof scn.gcam);
+    scn.prev_g = scn.have_g;
     memcpy(scn.pV, scn.V, sizeof scn.V);
     memcpy(scn.pP, scn.P, sizeof scn.P);
     memcpy(scn.pcam, scn.cam, sizeof scn.cam);
@@ -8227,6 +8328,15 @@ void vkr_water_step(const VkWaterStep *s)
 /* In the view, after the world: the picture and the scene's distances copied, then the surface and the spray. */
 void vkr_water_draw(Surface *rt, Surface *zb, const float *world_to_shot, float between, float time)
 {
+    /* (in the scene: its own passes take no motion vectors or masks: what is under it keeps them) */
+    int keep_mot = want_mot;
+    want_mot = 0;
+    void vkr_water_draw_(Surface *, Surface *, const float *, float, float);
+    vkr_water_draw_(rt, zb, world_to_shot, between, time);
+    want_mot = keep_mot;
+}
+void vkr_water_draw_(Surface *rt, Surface *zb, const float *world_to_shot, float between, float time)
+{
     if (!wat_have || !li_sun || li_view.block < 0 || !wat_last.rect[2])
         return;
     GpuImg *c = rt_sync(rt), *z = depth_sync(zb, c);
@@ -8285,6 +8395,10 @@ void vkr_water_draw(Surface *rt, Surface *zb, const float *world_to_shot, float 
         pc.clip[k * 4 + 1] = ay * m[4 + k] + by * m[12 + k];
         pc.clip[k * 4 + 2] = m[8 + k];
         pc.clip[k * 4 + 3] = m[12 + k];
+        if (scn.active && scn.fsr) {    /* (the scene's jitter, as its draws have it) */
+            pc.clip[k * 4 + 0] += scn.jndc[0] * pc.clip[k * 4 + 3];
+            pc.clip[k * 4 + 1] += scn.jndc[1] * pc.clip[k * 4 + 3];
+        }
     }
     pc.a[0] = (int)wa[wat_cur]->slot;
     pc.a[1] = (int)wa[1 - wat_cur]->slot;

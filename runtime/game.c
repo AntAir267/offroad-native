@@ -476,6 +476,7 @@ static void fog_write(int off)
         W32(f + 0x24, fog_kept[3]);
     }
 }
+extern void taa_view_begin(CPU *c, uint32_t view), taa_view_end(void), taa_world(void), taa_land(int on), taa_sky(int on);
 static void fog_view_begin(uint32_t view)
 {
     uint32_t f = R32(view + 0x20);
@@ -536,12 +537,14 @@ static int view_draw_hook(CPU *c)
     }
     if (fabsf(yaw) < 0.002f && fabsf(pitch) < 0.002f) {
         yaw = pitch = 0.0f;
-        if (!draw_only)
-            return 0;
+        taa_view_begin(c, R32(c->esp + 4));
         F_004daec0_orig(c);
+        taa_view_end();
         fog_view_end();
-        cam_write(vcam, cam_cur);
-        int_apply(1);
+        if (draw_only) {
+            cam_write(vcam, cam_cur);
+            int_apply(1);
+        }
         return 1;
     }
     uint32_t view = R32(c->esp + 4), cam = R32(view + 4), keep = c->ecx;
@@ -589,7 +592,9 @@ static int view_draw_hook(CPU *c)
     turn(cam + 0x24, cy, sy, cp, sp, right);
     W8(cam + 0x1d0, 0);
     W8(cam + 0xcc, 0);
+    taa_view_begin(c, R32(c->esp + 4));
     F_004daec0_orig(c);
+    taa_view_end();
     fog_view_end();
     for (int i = 0; i < 4; i++)
         for (int k = 0; k < 4; k++)
@@ -617,6 +622,7 @@ static int time_world_hook(CPU *c)
 {
     double t0 = mono_ms();
     fog_write(1);
+    taa_world();
     uint32_t view = R32(c->esp + 4);
     F_0054ea20_orig(c);
     t_sum[T_WORLD] += mono_ms() - t0;
@@ -648,7 +654,9 @@ static int time_sky_hook(CPU *c)
     union { float f; uint32_t u; } g = {RF32(cam + 0x250) / far_scale()};
     W32(cam + 0x250, g.u);
     fog_write(0);
+    taa_sky(1);
     F_004ea330_orig(c);
+    taa_sky(0);
     fog_write(1);
     W32(cam + 0x250, far_now);
     t_sum[T_SKY] += mono_ms() - t0;
@@ -780,7 +788,13 @@ static int puff_draw_hook(CPU *c)
 
 /* The terrain's walk, land and fog: native_land.c does the whole call, or calls the original */
 static int walk_hook(CPU *c) { native_walk_call(c); return 1; }
-static int land_hook(CPU *c) { native_land_call(c); return 1; }
+static int land_hook(CPU *c)
+{
+    taa_land(1);
+    native_land_call(c);
+    taa_land(0);
+    return 1;
+}
 static int fog_hook(CPU *c) { native_fog_call(c); return 1; }
 
 void game_init(void)
@@ -808,8 +822,8 @@ void game_init(void)
     hook_time_world = time_world_hook;
     hook_terrain_fog = time_fog_hook;
     hook_view_draw = view_draw_hook;
-    extern int light_car_hook(CPU *c);
-    hook_car_draw = light_car_hook;
+    extern int taa_car_hook(CPU *c);
+    hook_car_draw = taa_car_hook;
     hook_car_available = car_available_hook;
     hook_texture_name = texture_name_hook;
     hook_puddle_hit = puddle_hit_hook;

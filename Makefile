@@ -26,7 +26,7 @@ GEN_OBJ = $(patsubst gen/%.c,build/obj/gen_%.o,$(GEN_SRC))
 
 all: build/offroad
 
-gen/funcs.h: $(filter-out tools/profile.py,$(wildcard tools/*.py)) $(BUILD_CFG)
+gen/funcs.h: $(filter-out tools/profile.py tools/fsr2_shaders.py,$(wildcard tools/*.py)) $(BUILD_CFG)
 	$(PY) tools/recomp.py $(GAME)/OffRoad.exe $(BUILD_CFG) gen
 gen/table.c gen/stubs.c: gen/funcs.h ;
 gen/files.mk: gen/funcs.h
@@ -54,7 +54,35 @@ SPV_H += runtime/shaders/draw.frag.rays.spv.h
 build/obj/rt_vk.o: $(SPV_H)
 shaders: $(SPV_H)
 
-build/offroad: $(GEN_OBJ) $(RT_OBJ)
+# FSR 2 (third_party/FidelityFX-FSR2, fetched locally, MIT licence; vk.c's temporal anti-aliasing):
+# its API and Vulkan backend (C++, as AMD ships them, with runtime/fsr2_compat.h for Linux), its
+# shaders compiled into the headers the backend includes (tools/fsr2_shaders.py; AMD's Windows
+# compiler is never run), and runtime/fsr2.cpp around them. Without the source, Anti-Aliasing
+# has no FSR 2.
+FSR2 ?= third_party/FidelityFX-FSR2/src/ffx-fsr2-api
+ifneq ($(wildcard $(FSR2)/ffx_fsr2.h),)
+FSR2_PERM = build/fsr2/ffx_fsr2_accumulate_pass_permutations.h
+FSR2_OBJ = build/obj/fsr2_api.o build/obj/fsr2_assert.o build/obj/fsr2_vk.o build/obj/fsr2_shaders_vk.o build/obj/rt_fsr2.o
+CXXFLAGS_FSR2 = -std=c++17 -O2 -g -DFFX_GCC -include runtime/fsr2_compat.h -I$(FSR2) -Ibuild/fsr2 -Iruntime -w
+CFLAGS_RT += -DHAVE_FSR2
+LDFLAGS += -lstdc++
+EXTRA_OBJ += $(FSR2_OBJ)
+$(FSR2_PERM): tools/fsr2_shaders.py | build/obj
+	$(PY) tools/fsr2_shaders.py $(FSR2) build/fsr2 $(GLSLANG)
+build/obj/fsr2_api.o: $(FSR2)/ffx_fsr2.cpp runtime/fsr2_compat.h | build/obj
+	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
+build/obj/fsr2_assert.o: $(FSR2)/ffx_assert.cpp runtime/fsr2_compat.h | build/obj
+	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
+# (its memory types through fsr2.cpp: it would take AMD's device-coherent ones, which need a feature)
+build/obj/fsr2_vk.o: $(FSR2)/vk/ffx_fsr2_vk.cpp runtime/fsr2_compat.h | build/obj
+	$(CXX) $(CXXFLAGS_FSR2) -DvkGetPhysicalDeviceMemoryProperties=fsr2_memory_properties -c $< -o $@
+build/obj/fsr2_shaders_vk.o: $(FSR2)/vk/shaders/ffx_fsr2_shaders_vk.cpp $(FSR2_PERM) runtime/fsr2_compat.h | build/obj
+	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
+build/obj/rt_fsr2.o: runtime/fsr2.cpp runtime/fsr2.h runtime/fsr2_compat.h | build/obj
+	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
+endif
+
+build/offroad: $(GEN_OBJ) $(RT_OBJ) $(EXTRA_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 build/obj:

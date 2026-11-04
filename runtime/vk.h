@@ -170,6 +170,10 @@ void vk_smoke_take(const D3DState *st, const float (*pos)[3], int n, uint32_t di
    drawn over it there as before. vk_scene_class says what the next draws are (VK_SC_*). */
 typedef struct {
     int32_t cam[3];               /* the camera, 16.16 game units as the game keeps it */
+    /* a game that hands the renderer screen-space vertices (Off-Road): its world -> screen (x w, y w, z w, w) matrix, row
+       vectors (g[15] or g[11] not 0: given), the camera's position, near and far, vertical angle (radians) */
+    float g[16], eye[3], near_far[2], fov_y;
+    struct Surface *rt;           /* (not NULL: the scene is this target's; draws to others before it stay out) */
 } VkScene;
 /* DECAL: skid marks and objects' shadows (still on the ground); CAR_SHADOW: a car's shadow (it moves with the car) */
 enum { VK_SC_OBJECT, VK_SC_SKY, VK_SC_TERRAIN, VK_SC_WATER, VK_SC_PARTS, VK_SC_DECAL, VK_SC_CAR_SHADOW };
@@ -184,6 +188,7 @@ int vk_hp_available(void);              /* the device can draw the 16-bit scene 
 void vk_scene_begin(const VkScene *s);
 void vk_scene_camera(const VkScene *s); /* the camera as the view draws (its first draws) */
 void vk_scene_class(int cls);
+void vk_scene_object(const float *m);  /* the next draws' move since the last scene, world now -> then (16; NULL: still) */
 void vk_scene_end(void);
 void vk_options(void);                  /* re-read the Enhanced options (resolution, antialiasing, vsync, textures) */
 void vk_native_size(int *w, int *h);    /* the picture area in pixels */

@@ -65,8 +65,8 @@ static const char *const help[][2] = {
     {"music_level", "music_level, engine_level, effects_level: 0..15, 10 as the game made them (music starts at 7)"},
     {"engine_level", "engine_level: see music_level"},
     {"effects_level", "effects_level: see music_level"},
-    {"antialiasing", "antialiasing: off, or 4x (drawn at twice the size each way and scaled down: smoother "
-                     "edges, more work for the graphics card)"},
+    {"antialiasing", "antialiasing: off, fxaa, taa (the port's own temporal one), fsr (AMD's FSR 2), dlss (NVIDIA RTX), 2x or 4x (drawn larger and scaled down)"},
+    {"render_scale", "render_scale: native, quality, balanced, performance or auto (taa, fsr, dlss: the 3D world drawn smaller and scaled up)"},
     {"textures", "textures: original (as the game asks) or smooth (trilinear and anisotropic filtering on "
                  "the 3D world's textures: sharper roads at a distance)"},
     {"colour_precision", "colour_precision: original (16-bit colour, as the game draws) or high (the 3D "

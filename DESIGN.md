@@ -165,6 +165,26 @@ Water simulation (Lighting > Water, Simulated by default, Original the game's; L
 
 Fog (Lighting > Fog, Off by default, Original): game.c fog_*. The land's overlay skipped and the fog object's start set to 4 x far from the land on, mist bit off, so nothing has any; the sky keeps the real values (without them its horizon is a black band: first try nulled the object). Time hooks for world and fog are always installed now (they were only under ORR_TIME_LOG, which hid this).
 
+Anti-aliasing (Ant 2026-11-04: "TAA, FXAA, DLSS, and everything else"). Video > More Options > Anti-Aliasing: Off, FXAA, TAA, FSR 2,
+DLSS (only where it can run: the row lists what this machine has), 2x, 4x; Render Scale: Native, Quality, Balanced, Performance, Auto
+(TAA, FSR 2, DLSS). The renderer's scene (vk.c, from 1NSANE's lineage) had never run in this port: nothing called vk_scene_begin, so
+Colour Precision High did nothing either until now. runtime/taa.c is the game's side: the scene round 0x4daec0 for the race's main
+view (one player), tied to the back buffer it began on (VkScene.rt: earlier draws elsewhere stay out). Off-Road's world is screen-space
+vertices, so motion comes from the game's own matrix (0x4f0cb0) [verified: still camera reads zero, a moving one spreads from the
+middle, the car about zero, ORR_TAA_DEBUG=1]: clip -> the game's screen (the water's mapping, S) -> world (G inverse) -> its move (a
+car's matrix then and now, taa_car_hook; the sky with the camera, from the view's start to the land and the clouds) -> last scene's
+G -> clip. The game clears its depth inside the view, into the scene's: the copy back clears the back buffer's depth first and covers
+the whole target (without that the copy was depth-tested away and the back buffer's stale loading screen showed). FXAA: taa.frag
+mode 4, written from the method, in the scene's copy back. 2x: drawn 1.41 x each way. FSR 2: AMD's 2.2.1 source, copied from 1NSANE's
+third_party (MIT, not committed: third_party/), built when there. DLSS: dlss.c in, no SDK here (1NSANE's copy was removed): needs
+NVIDIA's SDK in third_party/DLSS, Linux libraries, to build in; only the T7's or the 4070 PC's card can run it. The water's own passes
+take no motion vectors (what is under them keeps theirs) and get the jitter.
+DEAD END, 890M (RADV): TAA's history as R16G16B16A16_SFLOAT render targets hung the GPU ring (kernel reset) every run, even a shader
+of one colour fetch; in the 16-bit scene's unorm format it runs. A copy back with no depth attachment hung it too. Check the kernel
+log (journalctl -k, "ring gfx timeout") after graphics changes: a reset can recover without the run seeing an error.
+Numbers, 890M, 2560x1440, Extreme, Slaughter day, GPU per frame mean: Off 4.97 (the scene with Colour Precision High), FXAA 4.75 (no
+cost to measure), TAA 5.21, FSR 2 9.64, 2x 8.28, 4x 15.83; TAA Quality 3.71; FSR 2 Quality 6.64, Balanced 5.90, Performance 5.49.
+
 Restart crash (Ant, fixed 2026-11-02): Restart runs a race's first update from inside the old one (0x4d7690 > 0x4d7d00 > 0x4d7510 > 0x4d7690), the cars going meanwhile; int_snapshot read a car whose wheel list was 0. Only with in-between frames on (a screen over 60 Hz or Frame Rate over 60), so --test never sees it. A nested update now forgets the car list and interpolation records. Test: REAL=1 race.sh with STEER="300:ESC,420:DOWN,470:UP,540:ENTER,660:ENTER" and --option frame_rate=144. Puddles: a new batch of 0x4a1710 calls replaces the list and resets the grid.
 
 Real-time numbers, Challenge with 4 cars, Everglade sunset, 1440p, Extreme, 890M, Frame Rate 144, other jobs on the machine (load 5): anti-aliasing off GPU 7.31 ms mean, 10.85 p99, 128 fps, game CPU world 5.28; anti-aliasing 4x (5120 x 2880) GPU 30.32 mean, 41.82 p99, 32 fps: Ant's whole race ran at this, about 30 fps (his log's frame numbers against time; the slow-frame log stops at 400 lines).

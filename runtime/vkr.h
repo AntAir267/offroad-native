@@ -56,6 +56,7 @@ void vkr_smoke_take(const D3DState *st, const float (*pos)[3], int n, uint32_t d
 void vkr_scene_begin(const VkScene *s);
 void vkr_scene_camera(const VkScene *s);
 void vkr_scene_class(int cls);
+void vkr_scene_object(const float *m);
 void vkr_scene_end(void);
 void vkr_options(void);
 /* Flip on the GPU side: the colour images of a flip chain move as its memory did (ddraw.c) */
