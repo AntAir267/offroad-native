@@ -900,6 +900,31 @@ static int gpu_layout(const Fetch *f)
            f->specular == f->pos + 28 && f->tex[0] == f->pos + 32 && f->l.texdim[0] == 2;
 }
 
+static uint32_t pack_rgba(const float *c)
+{
+    uint32_t r = 0;
+    for (int i = 0; i < 4; i++) {
+        float v = c[i] < 0 ? 0 : c[i] > 1 ? 1 : c[i];
+        r |= (uint32_t)(v * 255.0f + 0.5f) << (8 * i);
+    }
+    return r;
+}
+
+/* a SwVertex as the GPU path takes it */
+static void vk_vtx(const SwVertex *s, VkVtx *o)
+{
+    o->x = s->x;
+    o->y = s->y;
+    o->z = s->z;
+    o->w = s->w;
+    o->rgba[0] = s->packed ? s->rgba[0] : pack_rgba(s->diffuse);
+    o->rgba[1] = s->packed ? s->rgba[1] : pack_rgba(s->specular);
+    for (int t = 0; t < 2; t++) {
+        o->tc[t][0] = s->tc[t][0];
+        o->tc[t][1] = s->tc[t][1];
+    }
+}
+
 static void pretransformed_vertex(const Layout *l, const RawVtx *v, SwVertex *o)
 {
     o->packed = 0;
@@ -1082,11 +1107,43 @@ static uint32_t draw(Device *d, int api, uint32_t prim, const Fetch *f, uint32_t
         return D3D_OK;
     }
     cpu_draws++;
+    int pre = f->l.pos == 2;
+    /* The GPU's screen-space draws (the whole race's world): the game's own 40-byte vertices, XYZRHW|DIFFUSE|SPECULAR|TEX2, copied as
+       they are with w and the colours' byte order put right; no floats in between. Was 1/3 of all the CPU time in a race (unpacked
+       into SwVertex here, packed again in vk.c) [verified: ORR_PROFILE 2026-11-04] */
+    if (gpu && pre && f->l.fvf == 0x2c4 && f->spos == 40 && f->diffuse == f->pos + 16 && f->specular == f->pos + 20 &&
+        f->tex[0] == f->pos + 24 && f->tex[1] == f->pos + 32 && f->l.texdim[0] == 2 && f->l.texdim[1] == 2 &&
+        !(vb && vb->clip && d->st.rs[RS_CLIPPING])) {
+        static VkVtx *vv;
+        static uint16_t *vix;
+        static uint32_t cap_v, cap_i;
+        if (n > cap_v) {
+            cap_v = n * 2;
+            vv = realloc(vv, cap_v * sizeof *vv);
+        }
+        if (nidx > cap_i) {
+            cap_i = nidx * 2;
+            vix = realloc(vix, cap_i * sizeof *vix);
+        }
+        if (!vv || (nidx && !vix))
+            fatal("out of memory");
+        memcpy(vv, gptr(f->pos + start * 40), (size_t)n * 40);
+        for (uint32_t i = 0; i < n; i++) {
+            VkVtx *o = &vv[i];
+            o->w = o->w > 0 ? 1.0f / o->w : 1.0f;
+            for (int k = 0; k < 2; k++) {
+                uint32_t c = o->rgba[k];
+                o->rgba[k] = (c & 0xff00ff00u) | (c >> 16 & 0xffu) | (c & 0xffu) << 16;
+            }
+        }
+        memcpy(vix, gptr(idx), (size_t)nidx * 2);
+        vk_draw(&d->st, (int)prim, vv, (int)n, vix, (int)nidx, 1);
+        return D3D_OK;
+    }
     SwVertex *sv = malloc(n * sizeof *sv);
     uint16_t *ix = nidx ? malloc(nidx * sizeof *ix) : NULL;
     if (!sv || (nidx && !ix))
         fatal("out of memory");
-    int pre = f->l.pos == 2;
     Xform *x = NULL;
     if (!pre) {
         x = malloc(sizeof *x);
@@ -1119,7 +1176,13 @@ static uint32_t draw(Device *d, int api, uint32_t prim, const Fetch *f, uint32_t
         ix[i] = (uint16_t)R16(idx + 2 * i);
     if (gpu) {
         vk_tnl_ms += now_real_ms() - t0;
-        vk_draw(&d->st, (int)prim, sv, (int)n, ix, (int)nidx, pre && !useclip);
+        VkVtx *vv = malloc((n ? n : 1) * sizeof *vv);
+        if (!vv)
+            fatal("out of memory");
+        for (uint32_t i = 0; i < n; i++)
+            vk_vtx(&sv[i], &vv[i]);
+        vk_draw(&d->st, (int)prim, vv, (int)n, ix, (int)nidx, pre && !useclip);
+        free(vv);
     }
     else
         swrast_draw(&d->st, (int)prim, sv, (int)n, ix, (int)nidx, pre && !useclip);

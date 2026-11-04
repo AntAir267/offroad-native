@@ -191,6 +191,25 @@ log (journalctl -k, "ring gfx timeout") after graphics changes: a reset can reco
 Numbers, 890M, 2560x1440, Extreme, Slaughter day, GPU per frame mean: Off 4.97 (the scene with Colour Precision High), FXAA 4.75 (no
 cost to measure), TAA 5.21, FSR 2 9.64, 2x 8.28, 4x 15.83; TAA Quality 3.71; FSR 2 Quality 6.64, Balanced 5.90, Performance 5.49.
 
+CPU round 2026-11-04 (Ant: "cut CPU time"). ORR_PROFILE samples (perf needs root) of a real-time Challenge race, 4 cars, Everglade
+sunset, Extreme, 1440p, Frame Rate 144, grouped by function with addr2line (work/prof.py, not committed): both threads' CPU per frame
+10.6 ms -> 6.0-6.7 ms; the game thread's world 6.0 -> 3.3 ms, its ground 3.1 -> 0.6-0.8 ms. Other jobs ran (a backup at 130%), so
+frame rates are rough: 105 -> 135 fps against the 144 cap. What it was:
+- The screen-space vertices (the whole world): d3d.c unpacked each 40-byte game vertex into a 130-byte SwVertex of floats, the queue
+  copied those, vk.c packed them again: 1/3 of all CPU. Now VkVtx (gfx.h, 40 bytes, the game's own layout): XYZRHW|DIFFUSE|SPECULAR|
+  TEX2 copied with w = 1/rhw and the colours' red and blue swapped; other layouts convert SwVertex -> VkVtx; the software rasterizer
+  keeps SwVertex. vk.c's placement loop for the usual draw without per-vertex branches, the same sums in the same order. [verified:
+  frames from the installed build and the new one identical, every pixel, five frames at night]
+- Regression of the water round: the lake bit (view +0x38 bit 1) was set on every track, and on cells flagged 8 (thousands on
+  Everglade and Slaughter Yard) it makes the land draw a second water layer the game never shows: 2.3 ms a frame, and possibly that
+  layer on screen. Now only on tracks with a lake (light_has_lake).
+- Regression of the anti-aliasing round: the water drew into the back buffer while the world was in the scene's image, which then
+  covered it: no simulated water was visible. Now into the scene's images. And vkr_clear passed no state to scene_target, which the
+  back-buffer check would have read: fixed before it bit.
+Left, each 0.2-0.5 ms: the walk (marking each cell's objects), 0x527e60 (objects' vertices to the screen, 815 bytes, x87 exact needed),
+0x5609f0 (12.7 KB), 0x568d60, 0x52c8f0; libc's waits and copies. At Extreme 1440p the GPU is now the limit (about 7 ms a frame), so
+more CPU work saves power, not frames.
+
 Restart crash (Ant, fixed 2026-11-02): Restart runs a race's first update from inside the old one (0x4d7690 > 0x4d7d00 > 0x4d7510 > 0x4d7690), the cars going meanwhile; int_snapshot read a car whose wheel list was 0. Only with in-between frames on (a screen over 60 Hz or Frame Rate over 60), so --test never sees it. A nested update now forgets the car list and interpolation records. Test: REAL=1 race.sh with STEER="300:ESC,420:DOWN,470:UP,540:ENTER,660:ENTER" and --option frame_rate=144. Puddles: a new batch of 0x4a1710 calls replaces the list and resets the grid.
 
 Real-time numbers, Challenge with 4 cars, Everglade sunset, 1440p, Extreme, 890M, Frame Rate 144, other jobs on the machine (load 5): anti-aliasing off GPU 7.31 ms mean, 10.85 p99, 128 fps, game CPU world 5.28; anti-aliasing 4x (5120 x 2880) GPU 30.32 mean, 41.82 p99, 32 fps: Ant's whole race ran at this, about 30 fps (his log's frame numbers against time; the slow-frame log stops at 400 lines).

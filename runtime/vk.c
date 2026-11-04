@@ -2565,15 +2565,6 @@ static void set_state(const GpuImg *c, const int *sc, VkCullModeFlags cull, int 
     }
 }
 
-static uint32_t pack_rgba(const float *c)
-{
-    uint32_t r = 0;
-    for (int i = 0; i < 4; i++) {
-        float v = c[i] < 0 ? 0 : c[i] > 1 ? 1 : c[i];
-        r |= (uint32_t)(v * 255.0f + 0.5f) << (8 * i);
-    }
-    return r;
-}
 
 /* Does a draw's texture have cut-outs where the draw uses it? The texture coordinates' extent of
    the vertices it uses (40-byte vertices: u, v at 32; its indices, or all nv) against the
@@ -3431,14 +3422,14 @@ static float zbias_units(const GpuImg *z, uint32_t zbias)
     return -(float)zbias * (z->format == VK_FORMAT_D16_UNORM ? 1.0f : 256.0f);
 }
 
-static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+static void draw_impl(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
                       int pretransformed, const void *raw, const TnlConst *k);
 /* temporal anti-aliasing (its section below) */
 static int scene_target(GpuImg **c, GpuImg **z, const D3DState *st);
 static void scene_motion(const D3DState *st, PushDraw *pc, const TnlConst *k, const void *raw, int nv, const uint16_t *idx,
                          int ni, int pretransformed, const float *pl0, int blend, uint32_t sbf, uint32_t dbf, int zwrite,
                          Surface *t0, const int *sc);
-void vkr_draw(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+void vkr_draw(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
              int pretransformed)
 {
     double t = wall_ms();
@@ -3450,7 +3441,7 @@ void vkr_draw(const D3DState *st, int prim, const SwVertex *v, int nv, const uin
    of a quad per letter; each name (a run of letters side by side in a row) moves from its place in
    the 4:3 picture to the widened view's, keeping its shape: out[i] the shift of vertex i (GPU
    pixels). 0 if the draw is not quads like that (one shift for the draw then). */
-static int ws_runs(const D3DState *st, const SwVertex *v, int nv, int pretransformed, float k, const GpuImg *c,
+static int ws_runs(const D3DState *st, const VkVtx *v, int nv, int pretransformed, float k, const GpuImg *c,
                    float *out)
 {
     if (nv < 8 || nv % 4 || nv > 4096)
@@ -3659,7 +3650,7 @@ static void refl_gather(const D3DState *st, const TnlConst *k, const void *raw, 
 }
 
 /* Whether a draw's vertices span the whole viewport (to within a pixel) */
-static int covers_view(const D3DState *st, const SwVertex *v, int nv, int pretransformed)
+static int covers_view(const D3DState *st, const VkVtx *v, int nv, int pretransformed)
 {
     float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
     for (int i = 0; i < nv; i++) {
@@ -3676,7 +3667,7 @@ static int covers_view(const D3DState *st, const SwVertex *v, int nv, int pretra
     return x0 <= st->vp.x + 1 && x1 >= st->vp.x + st->vp.w - 1 && y0 <= st->vp.y + 1 && y1 >= st->vp.y + st->vp.h - 1;
 }
 
-static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+static void draw_impl(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
                       int pretransformed, const void *raw, const TnlConst *k)
 {
     static int warned_stage2;
@@ -3746,7 +3737,7 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
     }
     /* the water's spray, a quarter of its sheets (game.c splash_draw_hook): their flecks 4 times as strong */
     if (pretransformed && !k && r[RS_ALPHABLENDENABLE] && r[RS_SRCBLEND] == 5 && r[RS_DESTBLEND] == 6 && !r[RS_ZWRITEENABLE] &&
-        st->tex[0] && st->tex[0]->width == 64 && st->tex[0]->height == 64 && nv >= 16 && (v[0].packed ? (v[0].rgba[0] & 0xffffffu) == 0xffffffu : v[0].diffuse[0] >= 0.99f)) {
+        st->tex[0] && st->tex[0]->width == 64 && st->tex[0]->height == 64 && nv >= 16 && (v[0].rgba[0] & 0xffffffu) == 0xffffffu) {
         fl |= 1u << 11;
         pc.fog[2] = 4.0f;
     }
@@ -4027,9 +4018,37 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
         if (!far_bind)
             memcpy(vp, raw, (size_t)nv * 40);
     }
+    int nv_done = 0;
     GV *gv = (GV *)vp;
-    for (int i = 0; i < nv && !k; i++) {
-        const SwVertex *s = &v[i];
+    /* (the usual screen-space draw: the placement as one multiply and add each way, worked out once for the draw) */
+    if (pretransformed && !k && place != 2 && !by_vertex) {
+        /* (the same sums in the same order as below: the same pixels) */
+        float sy = c->sy, ox = c->ox, jx = in_scene ? scn.jndc[0] : 0.0f, jy = in_scene ? scn.jndc[1] : 0.0f;
+        int t0 = tci[0] & 1, t1 = tci[1] & 1;
+        for (int i = 0; i < nv; i++) {
+            const VkVtx *s = &v[i];
+            GV *o = &gv[i];
+            float w = s->w > 0 && isfinite(s->w) ? s->w : 1.0f;
+            float px = (s->x + 0.5f) * sy + ox + shift;
+            o->pos[0] = (2.0f * px / PW - 1.0f) * w;
+            o->pos[1] = (2.0f * (s->y + 0.5f) / H - 1.0f) * w;
+            o->pos[2] = s->z * w;
+            o->pos[3] = w;
+            if (in_scene) {
+                o->pos[0] += jx * w;
+                o->pos[1] += jy * w;
+            }
+            o->diffuse = s->rgba[0];
+            o->specular = s->rgba[1];
+            o->tc0[0] = s->tc[t0][0];
+            o->tc0[1] = s->tc[t0][1];
+            o->tc1[0] = s->tc[t1][0];
+            o->tc1[1] = s->tc[t1][1];
+        }
+        nv_done = 1;
+    }
+    for (int i = 0; i < nv && !k && !nv_done; i++) {
+        const VkVtx *s = &v[i];
         GV *o = &gv[i];
         if (pretransformed) {
             float w = s->w > 0 && isfinite(s->w) ? s->w : 1.0f;
@@ -4048,17 +4067,12 @@ static void draw_impl(const D3DState *st, int prim, const SwVertex *v, int nv, c
             o->pos[2] = mnz * s->w + dz * s->z;
             o->pos[3] = s->w;
         }
-        if (s->packed) {
-            o->diffuse = s->rgba[0];
-            o->specular = s->rgba[1];
-        } else {
-            o->diffuse = pack_rgba(s->diffuse);
-            o->specular = pack_rgba(s->specular);
-        }
-        o->tc0[0] = s->tc[tci[0]][0];
-        o->tc0[1] = s->tc[tci[0]][1];
-        o->tc1[0] = s->tc[tci[1]][0];
-        o->tc1[1] = s->tc[tci[1]][1];
+        o->diffuse = s->rgba[0];
+        o->specular = s->rgba[1];
+        o->tc0[0] = s->tc[tci[0] & 1][0];
+        o->tc0[1] = s->tc[tci[0] & 1][1];
+        o->tc1[0] = s->tc[tci[1] & 1][0];
+        o->tc1[1] = s->tc[tci[1] & 1][1];
     }
 
     want_mot = in_scene;
@@ -6874,7 +6888,7 @@ static int scene_images(GpuImg *c, GpuImg *z)
 static int scene_target(GpuImg **c, GpuImg **z, const D3DState *st)
 {
     if (!scn.drawn) {
-        if (scn.want && st->rt != scn.want)
+        if (scn.want && (!st || st->rt != scn.want))
             return 0;
         if (taa_log)
             LOG(LOG_ALWAYS, "vk: scene %lu on %ux%u (%p), z %p", nframes, (*c)->w, (*c)->h, (void *)*c, (void *)*z);
@@ -7575,7 +7589,7 @@ void vkr_clear(const D3DState *st, int n, const int *rects, uint32_t flags, uint
     frame_begin();
     GpuImg *c = rt_sync(rs);
     GpuImg *d = depth_sync(st->zb, c);
-    int in_scene = scn.active && scene_target(&c, &d, NULL);      /* temporal anti-aliasing: the scene's images */
+    int in_scene = scn.active && scene_target(&c, &d, st);        /* temporal anti-aliasing: the scene's images */
     if (!in_scene && (flags & 1) && scn.active == 0 && scene_wanted()) {
         /* the back buffer's colour before the scene: the scene starts from it (scene_target) */
         scn.clear_set = 1;
@@ -8342,6 +8356,11 @@ void vkr_water_draw_(Surface *rt, Surface *zb, const float *world_to_shot, float
     GpuImg *c = rt_sync(rt), *z = depth_sync(zb, c);
     if (!c || !z)
         return;
+    /* (in the scene: into its images, where the world is) */
+    if (scn.active && scn.drawn && c == scn.dst) {
+        c = scn.c;
+        z = scn.z;
+    }
     end_rendering();
     wat_stamp_read();
     wat_stamp(2, 0);

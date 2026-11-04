@@ -1372,8 +1372,10 @@ void native_walk_call(CPU *c)
         return;
     }
     {
-        extern int water_enabled(void);
-        if (force_water || water_enabled())
+        /* (the game's lake surface past the simulated water: only where there is a lake. Elsewhere the bit also makes the land
+           draw a second water layer on its cells flagged 8, which the game never shows, at 5% of the frame's CPU [verified: profile]) */
+        extern int water_enabled(void), light_has_lake(void);
+        if (force_water || (water_enabled() && light_has_lake()))
             M32(R32(c->esp + 4) + 0x38) |= 2;
     }
     if (ab_every > 0 && ab_this_view()) {

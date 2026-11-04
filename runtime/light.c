@@ -281,6 +281,7 @@ int light_car_hook(CPU *c)
 
 /* any ground below the lake's level, 0, in this box of the world? (the lake's cells [verified: 0 flagged cells on the other maps, and none
    of them has ground below 0]) */
+int light_has_lake(void) { return lake_mask != NULL; }
 int light_lake_near(float x0, float z0, float x1, float z1)
 {
     if (!lake_mask)

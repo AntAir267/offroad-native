@@ -25,7 +25,7 @@ extern VkrCtx vkr;
 
 #define VKR_TNL_MAX 4096                /* GPU-lit draws per frame (vk.c TNL_MAX) */
 
-void vkr_draw(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+void vkr_draw(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
               int pretransformed);
 void vkr_draw_tnl(const D3DState *st, int prim, const void *raw, int nv, const uint16_t *idx, int ni,
                   const TnlConst *k);

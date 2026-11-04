@@ -383,6 +383,15 @@ typedef struct {
     int packed;
 } SwVertex;
 
+/* What the GPU path takes (vk_draw): the same, compact, 40 bytes: screen x, y, z and w = 1/rhw (pretransformed) or clip x, y, z, w;
+   diffuse and specular as R8G8B8A8; two texture coordinate sets. The game's own XYZRHW|DIFFUSE|SPECULAR|TEX2 vertices become these by
+   a copy, w and two byte swaps (d3d.c draw). */
+typedef struct {
+    float x, y, z, w;
+    uint32_t rgba[2];
+    float tc[2][2];
+} VkVtx;
+
 /* GPU transform and lighting (vk.c, shaders/tnl.vert): one draw's constants, std430 layout */
 typedef struct {
     float type_range[4];          /* type, range, falloff, - */

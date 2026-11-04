@@ -10,7 +10,7 @@ int vk_on(void);                  /* starts Vulkan on first use when wanted */
 int vk_target(const Surface *s);
 
 /* Direct3D */
-void vk_draw(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+void vk_draw(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
              int pretransformed);
 /* rects: n x (x0, y0, x1, y1), already clipped to the viewport; flags: D3DCLEAR_* */
 void vk_clear(const D3DState *st, int n, const int *rects, uint32_t flags, uint32_t color, float z,

@@ -326,7 +326,7 @@ static void run(const Cmd *c)
     }
     case C_DRAW: {
         const int32_t *a = (const int32_t *)p;     /* prim, nv, ni, pretransformed */
-        const SwVertex *v = (const SwVertex *)(p + 16);
+        const VkVtx *v = (const VkVtx *)(p + 16);
         const uint16_t *idx = a[2] ? (const uint16_t *)(v + a[1]) : NULL;
         vkr_draw(&rst, a[0], v, a[1], idx, a[2], a[3]);
         break;
@@ -695,7 +695,7 @@ int vk_tnl_ok(const D3DState *st, int nv)
     return 1;
 }
 
-void vk_draw(const D3DState *st, int prim, const SwVertex *v, int nv, const uint16_t *idx, int ni,
+void vk_draw(const D3DState *st, int prim, const VkVtx *v, int nv, const uint16_t *idx, int ni,
              int pretransformed)
 {
     if (!going()) {
