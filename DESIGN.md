@@ -176,8 +176,14 @@ car's matrix then and now, taa_car_hook; the sky with the camera, from the view'
 G -> clip. The game clears its depth inside the view, into the scene's: the copy back clears the back buffer's depth first and covers
 the whole target (without that the copy was depth-tested away and the back buffer's stale loading screen showed). FXAA: taa.frag
 mode 4, written from the method, in the scene's copy back. 2x: drawn 1.41 x each way. FSR 2: AMD's 2.2.1 source, copied from 1NSANE's
-third_party (MIT, not committed: third_party/), built when there. DLSS: dlss.c in, no SDK here (1NSANE's copy was removed): needs
-NVIDIA's SDK in third_party/DLSS, Linux libraries, to build in; only the T7's or the 4070 PC's card can run it. The water's own passes
+third_party (MIT, not committed: third_party/), built when there. DLSS (2026-11-04, on the T7, RTX 4070, driver 595.99): NVIDIA's SDK v310.9.1 (codeload tarball, 717 MB; git clone ran at 60 KB/s)
+in ~/sdk/DLSS-310.9.1 on the T7, built with make DLSS=$HOME/sdk/DLSS-310.9.1 (the static NGX library; libnvidia-ngx-dlss.so.310.9.1
+copied into build/, next to the program, where dlss.c points NGX). Not inside the project there: the T7 sync deletes git-ignored
+folders that do not also exist here (third_party/DLSS went; FidelityFX-FSR2, present here, stayed). Runs: Native is DLAA, Quality
+1707x960, Performance 1280x720 into 2560x1440; motion view right. Validation: about 10 VUID-vkDestroyImage/Buffer "in use" each time
+the feature is made: NGX destroys scratch objects it has just recorded, also in a command buffer of its own submitted and waited for
+(tried, no change, taken out). Not on the Win Max (no SDK there, and AMD cannot run it); the row leaves it out where it cannot run.
+T7, 2560x1440, Extreme, baked lighting and water on, GPU per frame mean: Off 2.62-2.68, TAA 2.82, FSR 2 3.07, DLSS (any scale) 3.0. The water's own passes
 take no motion vectors (what is under them keeps theirs) and get the jitter.
 DEAD END, 890M (RADV): TAA's history as R16G16B16A16_SFLOAT render targets hung the GPU ring (kernel reset) every run, even a shader
 of one colour fetch; in the 16-bit scene's unorm format it runs. A copy back with no depth attachment hung it too. Check the kernel
