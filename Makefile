@@ -107,14 +107,14 @@ UNICORN ?= $(firstword $(wildcard .venv/lib/python3*/site-packages/unicorn))
 build/obj/rt_main_nomain.o: runtime/main.c runtime/*.h gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -DRUNTIME_NO_MAIN -c $< -o $@
 
-build/fncheck: tests/fncheck.c $(filter-out build/obj/rt_main.o,$(RT_OBJ)) build/obj/rt_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o
+build/fncheck: tests/fncheck.c $(filter-out build/obj/rt_main.o,$(RT_OBJ)) build/obj/rt_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o $(EXTRA_OBJ)
 	$(CC) $(CFLAGS_RT) -I$(UNICORN)/include -o $@ $^ $(UNICORN)/lib/libunicorn.a $(LDFLAGS) -lrt
 
 # Reference build: the original code in Unicorn on the same runtime (ref/ref_cpu.c)
 build/obj/ref_cpu.o: ref/ref_cpu.c runtime/*.h gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -I$(UNICORN)/include -c $< -o $@
 
-build/offroad_ref: $(RT_OBJ) $(GEN_OBJ) build/obj/gen_x87_special.o build/obj/ref_cpu.o
+build/offroad_ref: $(RT_OBJ) $(GEN_OBJ) build/obj/gen_x87_special.o build/obj/ref_cpu.o $(EXTRA_OBJ)
 	$(CC) -o $@ $^ $(UNICORN)/lib/libunicorn.a $(LDFLAGS) -lrt
 
 check: build/fncheck
