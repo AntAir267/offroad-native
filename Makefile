@@ -82,6 +82,22 @@ build/obj/rt_fsr2.o: runtime/fsr2.cpp runtime/fsr2.h runtime/fsr2_compat.h | bui
 	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
 endif
 
+# DLSS (third_party/DLSS: NVIDIA's DLSS SDK, cloned locally at v310.9.1, NVIDIA RTX SDKs licence; not committed): runtime/dlss.c, vk.c's
+# other upscaler on FSR 2's inputs. Linux: its static NGX library, and the DLSS feature library copied next to the program, where
+# dlss.c tells NGX to look. Without the SDK the game builds without DLSS (the Anti-Aliasing row leaves it out); it runs only on
+# NVIDIA RTX cards (the T7's PCs).
+DLSS ?= third_party/DLSS
+ifneq ($(wildcard $(DLSS)/include/nvsdk_ngx_vk.h $(DLSS)/lib/Linux_x86_64/libnvsdk_ngx.a),)
+CFLAGS_RT += -DHAVE_DLSS -I$(DLSS)/include
+LDFLAGS += $(DLSS)/lib/Linux_x86_64/libnvsdk_ngx.a -lstdc++ -ldl
+DLSS_SO := $(firstword $(wildcard $(DLSS)/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.*))
+ifneq ($(DLSS_SO),)
+all: build/$(notdir $(DLSS_SO))
+build/$(notdir $(DLSS_SO)): $(DLSS_SO) | build/obj
+	cp $< $@
+endif
+endif
+
 build/offroad: $(GEN_OBJ) $(RT_OBJ) $(EXTRA_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
