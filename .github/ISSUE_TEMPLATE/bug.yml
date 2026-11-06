@@ -1,0 +1,35 @@
+name: Bug report
+description: Something looks or works wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please never attach game files or extracted game data. Screenshots and logs are welcome.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: Location, track, car, time of day and weather, and roughly where on the lap.
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings
+      description: The More Options and Lighting rows you changed, or paste ~/.local/share/offroad-native/options.txt.
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: Distribution, GPU and driver (the first lines of last-run.log say which GPU and driver Vulkan found).
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Attach ~/.local/share/offroad-native/last-run.log, above all after a crash.

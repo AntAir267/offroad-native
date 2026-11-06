@@ -1,0 +1,37 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Off-Road: Redneck Racing",
+  "system": "PC (Windows)",
+  "type": "recomp",
+  "original": {
+    "revision": "ZOOM Platform release",
+    "sha1": "1eed75666b7cdd0b5ad8a58fff9e85310a04751b"
+  },
+  "project": "Off-Road: Redneck Racing native",
+  "status": "in-progress",
+  "targets": [
+    "Linux",
+    "Steam Deck"
+  ],
+  "approach": "Static x86 recompilation to C on the player's machine; DirectX 7 on Vulkan; lockstep-checked against the original code",
+  "started": "2026-10-30",
+  "help": [
+    "Play-testing every track to the end",
+    "Windows build",
+    "Rewriting hot game functions natively"
+  ],
+  "tags": [
+    "vulkan",
+    "sdl3",
+    "racing",
+    "widescreen",
+    "fsr2"
+  ],
+  "maintainers": [
+    {
+      "name": "AntAir267",
+      "link": "https://github.com/AntAir267"
+    }
+  ],
+  "notes": "Races play on Linux and the Steam Deck. Adds widescreen, high frame rates, any controller, FXAA/TAA/FSR 2/DLSS, a GPU water simulation and ray-traced track lighting, all as rows in the game's own options. Bring your own copy of the game."
+}

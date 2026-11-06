@@ -1,0 +1,17 @@
+name: Idea or enhancement
+description: Something the port could do better
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Additions are options in the game's own menus, can be turned off, and never change how the game plays (see CONTRIBUTING.md).
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it would help

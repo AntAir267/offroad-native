@@ -64,7 +64,9 @@ Testing the Windows build under Wine (Proton 10): Wine keeps the low memory the 
 its own allocations, so runs need tools/dev/wine_lowfree.c (LD_PRELOAD into Wine; it says why).
 
 - FidelityFX Super Resolution 2.2.1 (MIT licence, Advanced Micro Devices): source cloned from github.com/GPUOpen-Effects/FidelityFX-FSR2 at
-  tag v2.2.1 into FidelityFX-FSR2/ (copied from ~/DevWork/1nsane-native/third_party). The build takes its API and Vulkan backend with
+  tag v2.2.1 into FidelityFX-FSR2/. The build takes its API and Vulkan backend with
   runtime/fsr2_compat.h, shaders compiled by tools/fsr2_shaders.py. Without the folder the game builds without FSR 2. A program built
   with it carries AMD's notice: FidelityFX Super Resolution 2.2, Copyright (c) 2022-2023 Advanced Micro Devices, Inc. (MIT).
-- NVIDIA DLSS SDK: not here. runtime/dlss.c builds in only with it in DLSS/.
+- NVIDIA DLSS SDK 310.9.1 (NVIDIA RTX SDKs licence): github.com/NVIDIA/DLSS at tag v310.9.1, given to make as DLSS=<its folder>
+  (or unpacked here as DLSS/). The build takes its headers and lib/Linux_x86_64/libnvsdk_ngx.a, and copies
+  lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.1 next to the program. Without it the game builds without DLSS.
