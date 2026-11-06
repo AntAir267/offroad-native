@@ -107,8 +107,17 @@ static int frame_timer_hook(CPU *c)
 
 /* ORR_RACE_LOOK=<time>[_<weather>] (tools/dev/race.sh): the race's time of day and weather whatever the menus chose,
    day, sunset or night, rain or snow: +0, +4 of the settings [verified: 0x4d9c30] */
+void game_level_loaded(void);
 static int level_load_hook(CPU *c)
 {
+    /* a race being set up: the last race's cars and interpolation records are gone (the next race's first update comes before
+       the baked lighting's load, which also clears them: Ant's crash starting a second race, on the Deck) [verified: reproduced,
+       the second race's first update, int_snapshot reading a freed car] */
+    {
+        extern void light_cars_forget(void);
+        light_cars_forget();
+        game_level_loaded();
+    }
     const char *l = getenv("ORR_RACE_LOOK");
     if (l) {
         uint32_t st = R32(c->esp + 4);

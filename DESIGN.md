@@ -210,6 +210,17 @@ Left, each 0.2-0.5 ms: the walk (marking each cell's objects), 0x527e60 (objects
 0x5609f0 (12.7 KB), 0x568d60, 0x52c8f0; libc's waits and copies. At Extreme 1440p the GPU is now the limit (about 7 ms a frame), so
 more CPU work saves power, not frames.
 
+Second-race crash (Ant on the Deck, fixed 2026-11-05): with in-between frames on, a new race's first update (from 0x4da670) ran
+int_snapshot over the last race's cars, freed; the car list was only cleared when the baked lighting loaded, after that update.
+level_load_hook (0x4d9c30, each race's setup) now clears it and the interpolation records. Reproduced and checked with race.sh,
+REAL=1, --option frame_rate=144 and STEER="300:ESC,620:DOWN,700:DOWN,800:ENTER,960:UP,1060:ENTER,1400:ENTER,1800:DOWN,1860:DOWN,
+2000:ENTER,2300:ENTER,2360:UP,2410:UP,2460:DOWN,2510:DOWN,2590:ENTER,2830:UP,2880:UP,2930:DOWN,2980:DOWN,3030:ENTER,4030:UP*900"
+(pause, Exit, Yes, Main Menu, Time Trial again; the pause menu ignores keys during its fade, the quit question defaults to No).
+Ant's other Deck reports (2026-11-05), played on the build copied there Nov 4 (md5 64d8da5c2f) before the current one arrived at
+22:30: puddles vanishing fits the water drawn under the scene (fixed Nov 4 16:27). Sky in front of things and blocky wall textures:
+not reproduced at the Deck's settings (1280x800, 4x, Extreme, darkest, colour high, simulated water) on Red Rock, Slaughter Yard,
+Everglade; the lake bit on lakeless tracks makes no visible difference (frames identical); no screenshots. Waiting for a capture.
+
 Restart crash (Ant, fixed 2026-11-02): Restart runs a race's first update from inside the old one (0x4d7690 > 0x4d7d00 > 0x4d7510 > 0x4d7690), the cars going meanwhile; int_snapshot read a car whose wheel list was 0. Only with in-between frames on (a screen over 60 Hz or Frame Rate over 60), so --test never sees it. A nested update now forgets the car list and interpolation records. Test: REAL=1 race.sh with STEER="300:ESC,420:DOWN,470:UP,540:ENTER,660:ENTER" and --option frame_rate=144. Puddles: a new batch of 0x4a1710 calls replaces the list and resets the grid.
 
 Real-time numbers, Challenge with 4 cars, Everglade sunset, 1440p, Extreme, 890M, Frame Rate 144, other jobs on the machine (load 5): anti-aliasing off GPU 7.31 ms mean, 10.85 p99, 128 fps, game CPU world 5.28; anti-aliasing 4x (5120 x 2880) GPU 30.32 mean, 41.82 p99, 32 fps: Ant's whole race ran at this, about 30 fps (his log's frame numbers against time; the slow-frame log stops at 400 lines).
