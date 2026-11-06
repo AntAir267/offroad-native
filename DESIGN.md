@@ -217,9 +217,15 @@ REAL=1, --option frame_rate=144 and STEER="300:ESC,620:DOWN,700:DOWN,800:ENTER,9
 2000:ENTER,2300:ENTER,2360:UP,2410:UP,2460:DOWN,2510:DOWN,2590:ENTER,2830:UP,2880:UP,2930:DOWN,2980:DOWN,3030:ENTER,4030:UP*900"
 (pause, Exit, Yes, Main Menu, Time Trial again; the pause menu ignores keys during its fade, the quit question defaults to No).
 Ant's other Deck reports (2026-11-05), played on the build copied there Nov 4 (md5 64d8da5c2f) before the current one arrived at
-22:30: puddles vanishing fits the water drawn under the scene (fixed Nov 4 16:27). Sky in front of things and blocky wall textures:
-not reproduced at the Deck's settings (1280x800, 4x, Extreme, darkest, colour high, simulated water) on Red Rock, Slaughter Yard,
-Everglade; the lake bit on lakeless tracks makes no visible difference (frames identical); no screenshots. Waiting for a capture.
+22:30: puddles vanishing fits the water drawn under the scene (fixed Nov 4 16:27). Sky in front of things and blocky wall textures
+(fixed 2026-11-06, Ant's hint: sunset): the sun's glare is an additive 256x256 quad drawn after the view (0x4d6be0, outside the
+scene), depth-tested against the back buffer's depth, which the scene's copy back had cleared: it lay over trees and canyon walls
+in cloud-like blotches, strongest at sunset with the sun low behind them. Found by bisecting options (Colour Precision Original
+clean, every other option still blotched) and ORR_DRAW_LOG=<frame> (each draw of a frame: the draws were the same either way, the
+glare the first after the scene). Now scene_depth_back puts the scene's depth into the back buffer's after the copy: a copy at the
+same size; at another size (FSR 2, TAA, DLSS below Native) a pass writing gl_FragDepth (shaders/depthback.frag, pipeline_create
+resolve 5), as RADV has no blits of D32_SFLOAT_S8_UINT. The scene's depth image takes TRANSFER_SRC for it. Dead ends: the clouds
+(0x4ea330) at the far depth and with their draws dropped (no change); the scene's alpha format (no change); the lake bit.
 
 Restart crash (Ant, fixed 2026-11-02): Restart runs a race's first update from inside the old one (0x4d7690 > 0x4d7d00 > 0x4d7510 > 0x4d7690), the cars going meanwhile; int_snapshot read a car whose wheel list was 0. Only with in-between frames on (a screen over 60 Hz or Frame Rate over 60), so --test never sees it. A nested update now forgets the car list and interpolation records. Test: REAL=1 race.sh with STEER="300:ESC,420:DOWN,470:UP,540:ENTER,660:ENTER" and --option frame_rate=144. Puddles: a new batch of 0x4a1710 calls replaces the list and resets the grid.
 

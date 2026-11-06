@@ -58,6 +58,7 @@
 #include "shaders/draw.frag.refl.motion.spv.h"
 #include "shaders/draw.frag.shadow.motion.spv.h"
 #include "shaders/taa.frag.spv.h"
+#include "shaders/depthback.frag.spv.h"
 #include "shaders/taau.frag.spv.h"
 #include "shaders/draw.frag.rays.spv.h"
 #include "shaders/water.frag.spv.h"
@@ -1742,6 +1743,11 @@ static VkPipeline pipeline_create(VkShaderModule vs, VkShaderModule fs, VkPrimit
         ds.depthTestEnable = VK_TRUE;
         ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     }
+    if (resolve == 5) {                 /* (the scene's depth written back, scene_depth_back: always, the colour kept) */
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    }
     VkPipelineColorBlendAttachmentState ba[5] = {
         {.blendEnable = blend ? VK_TRUE : VK_FALSE, .srcColorBlendFactor = sb, .dstColorBlendFactor = db,
          .colorBlendOp = VK_BLEND_OP_ADD, .srcAlphaBlendFactor = sb, .dstAlphaBlendFactor = db,
@@ -1774,6 +1780,8 @@ static VkPipeline pipeline_create(VkShaderModule vs, VkShaderModule fs, VkPrimit
             .colorBlendOp = resolve == 2 ? VK_BLEND_OP_ADD : VK_BLEND_OP_REVERSE_SUBTRACT,
             .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO, .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
             .alphaBlendOp = VK_BLEND_OP_ADD, .colorWriteMask = 0xf};
+    if (resolve == 5)
+        ba[0] = (VkPipelineColorBlendAttachmentState){.colorWriteMask = 0};
     if (resolve == 4)                   /* (headlights, resolve.frag pass 7: added) */
         ba[0] = (VkPipelineColorBlendAttachmentState){
             .blendEnable = VK_TRUE, .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -4324,6 +4332,15 @@ static void draw_impl(const D3DState *st, int prim, const VkVtx *v, int nv, cons
     if (z && (z->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) && r[52] && r[53] >= 1 && r[54] >= 1 && r[55] >= 1 && r[56] >= 1)
         memcpy(st_stencil, &r[52], sizeof st_stencil);
     uint32_t zf = r[RS_ZFUNC] >= 1 && r[RS_ZFUNC] <= 8 ? r[RS_ZFUNC] - 1 : VK_COMPARE_OP_LESS_OR_EQUAL;
+    {   /* ORR_DRAW_LOG=<frame>: every draw of that frame (tests) */
+        static long want = -2;
+        if (want == -2)
+            want = getenv("ORR_DRAW_LOG") ? atol(getenv("ORR_DRAW_LOG")) : -1;
+        if (want >= 0 && (long)nframes == want)
+            LOG(LOG_ALWAYS, "draw: scene %d c %ux%u fmt %d tex %dx%d blend %d %u %u zt %d zw %d zf %u st %u ref %u nv %d pre %d k %d light %u",
+                in_scene, c->w, c->h, c->format, st->tex[0] ? st->tex[0]->width : 0, st->tex[0] ? st->tex[0]->height : 0, blend, sbf, dbf,
+                ztest, zwrite, zf, st_stencil[0], st_stencil[1], nv, pretransformed, k != NULL, pc.inst[0]);
+    }
     set_state(c, sc, cull == 2 ? VK_CULL_MODE_FRONT_BIT : cull == 3 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, ztest,
               zwrite, (VkCompareOp)zf, ztest ? zbias_units(z, r[RS_ZBIAS]) : 0);
     memset(st_stencil, 0, sizeof st_stencil);
@@ -6803,7 +6820,7 @@ static int scene_images(GpuImg *c, GpuImg *z)
                               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         scn.c = img_new(K_RT, w, h, 1, cf, u | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         scn.z = img_new(K_DEPTH, w, h, 1, zf, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+                                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         scn.zview = scn.z->view;
         if (scn.fsr) {
             scn.vel = img_new(K_AUX, w, h, 1, VEL_FORMAT, u);
@@ -7430,6 +7447,67 @@ static GpuImg *taau_dispatch(void)
     return h;
 }
 
+/* After the copy back (scene_target's game, Off-Road): the scene's depth into the back buffer's, so what the game draws after the
+   view, depth-tested, is still hidden by the world: the sun's glare (an additive quad after the view) lay over trees and canyon walls
+   at sunset with the back buffer's depth cleared, Ant's "sky in front" and "blocky walls" on the Deck [verified: the frame's draws
+   logged, the same with Colour Precision Original; frames at sunset, Backwater]. Copied at the same size, else blitted (nearest). */
+static void scene_depth_back(GpuImg *dz)
+{
+    if (!scn.want || !dz || !scn.z || dz->format != scn.z->format)
+        return;
+    end_rendering();
+    VkImageAspectFlags a = dz->aspect & scn.z->aspect;
+    if (dz->w == scn.z->w && dz->h == scn.z->h) {
+        barrier(scn.z, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        barrier(dz, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy cp = {.srcSubresource = {a, 0, 0, 1}, .dstSubresource = {a, 0, 0, 1}, .extent = {dz->w, dz->h, 1}};
+        vkCmdCopyImage(cb, scn.z->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dz->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    } else {
+        static int can = -1;
+        if (can < 0) {
+            VkFormatProperties fp;
+            vkGetPhysicalDeviceFormatProperties(phys, dz->format, &fp);
+            can = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+            LOG(LOG_ALWAYS, "vk: the scene's depth goes back to the back buffer's %s", can ? "by a blit" : "by a pass (no depth blits here)");
+        }
+        if (!can) {
+            /* a pass that writes the depth, the colour kept */
+            static VkShaderModule sm;
+            static VkPipeline pl;
+            static VkFormat plc, plz;
+            GpuImg *c = scn.dst;
+            if (!sm)
+                sm = shader(spv_depthback_frag, sizeof spv_depthback_frag);
+            if (!pl || plc != c->format || plz != dz->format) {
+                pl = pipeline_create(sm_pv, sm, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, 0, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO,
+                                     c->format, dz->format, 0, 0, 0, 5);
+                plc = c->format;
+                plz = dz->format;
+            }
+            barrier(scn.z, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            begin_rendering(c, dz);
+            bind_pipeline(pl);
+            VkViewport vp = {0, 0, (float)c->w, (float)c->h, 0, 1};
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            VkRect2D r = {{0, 0}, {c->w, c->h}};
+            vkCmdSetScissor(cb, 0, 1, &r);
+            struct { int32_t idx[4]; float k[4]; } pc = {{(int32_t)scn.z->slot, smp_nearest, 0, 0},
+                                                        {1.0f / (float)c->w, 1.0f / (float)c->h, 0, 0}};
+            vkCmdPushConstants(cb, playout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+            vkCmdDraw(cb, 3, 1, 0, 0);
+            end_rendering();
+            bound_pipe = VK_NULL_HANDLE;
+        } else {
+            barrier(scn.z, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            barrier(dz, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageBlit b = {.srcSubresource = {a, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {(int32_t)scn.z->w, (int32_t)scn.z->h, 1}},
+                             .dstSubresource = {a, 0, 0, 1}, .dstOffsets = {{0, 0, 0}, {(int32_t)dz->w, (int32_t)dz->h, 1}}};
+            vkCmdBlitImage(cb, scn.z->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dz->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
+                           VK_FILTER_NEAREST);
+        }
+    }
+}
+
 /* The scene is drawn: FSR 2 (or DLSS) resolves it into the back buffer (without them, the 16-bit scene is
    copied there) */
 void vkr_scene_end(void)
@@ -7450,6 +7528,7 @@ void vkr_scene_end(void)
     barrier(scn.c, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     if (!scn.fsr) {               /* "colour_precision = high" alone: the same size, pixel for pixel, with its alpha; FXAA on the way */
         taa_copy(c, scn.dz, scn.c, aa_fxaa ? 4 : 0, 1, 0.0f);
+        scene_depth_back(scn.dz);
         if (timed) {
             vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, st_queries, tsb + 10);
             f->taa_timed = 1;
@@ -7513,8 +7592,10 @@ void vkr_scene_end(void)
         barrier(scn.out, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 #endif
-    if (ran)
+    if (ran) {
         taa_copy(c, scn.dz, res, 0, 0, sharp);
+        scene_depth_back(scn.dz);
+    }
     else                          /* debug views; the scene scaled up (FSR 2 failing) */
         taa_copy(c, scn.dz, taa_debug == 1 ? scn.vel : taa_debug == 2 ? scn.mask : taa_debug == 3 ? scn.z : scn.c,
                  taa_debug >= 1 && taa_debug <= 3 ? taa_debug : 0, 0, 0.0f);
