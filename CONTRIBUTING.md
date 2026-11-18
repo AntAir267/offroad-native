@@ -24,6 +24,12 @@ without ever changing how it plays.
 - **Write it down.** `DESIGN.md` is the project's record: add what you found and what you changed, and mark claims
   you haven't checked as [guess] and checked ones as [verified], with the evidence.
 
+## Where a change goes
+
+The translator and the Windows stand-in (files, threads, windows, input, sound, Miles) are AntiStatic's,
+in `third_party/antistatic`, shared with other games: a fix there goes to that repository, and this one
+moves its pin. Everything in `runtime/` (the renderer, menus, effects, the game's hooks) is this game's.
+
 ## How to send a change
 
 Open an issue first for anything big, so the approach can be agreed. Keep a pull request to one subject, describe

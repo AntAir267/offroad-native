@@ -318,3 +318,89 @@ hardtruck2-native's, and the game is at the usual path.
     SIZE=1024x768 bash tools/dev/shot.sh work/s 5700 300 "100:ESC,300:ESC,500:ESC,700:ESC,1000:UP,1040:UP,1080:UP,1200:ENTER,1500:ENTER,1800:ENTER,2100:ENTER,2400:ENTER,2700:ENTER,3100:UP*2600"
 Frame dumps land in work/s as .ppm. (Escapes after the movies move the menu's selection to Exit Game,
 so the UPs reach Time Trial.)
+
+Engine sound (researched 2026-11-10 for the 1NSANE car ports chat; full write-up kept outside the repo in work/engine-sounds-for-1nsane.md). Per-frame update 0x425800 with the rpm and load from 0x495730. Only the range table at 0x58cf90 is used: its switch at 0x58d224/0x58d230 is a constant 0. Pitch is 22050 × 2^(rpm·x2/recorded − 1). Load shifts the sample windows by −500 × load and scales volume by max(0.4, 0.85 × load). rev.wav is the one-shot start sound (FUN_00425e30); the loops wait for it to finish. The gear whine voice is dead. Measured [verified, scripted, all 16 cars]: idle 650 rpm, 9000 rpm cap seen only on a reset, automatic upshifts at 4900–7100 rpm (Hurricane about 8500). Debug: ORR_RPM_LOG=<frames> logs each drawn car's drivetrain +0x28 rpm, +0x44 gear (0 reverse, 1 neutral [guess]), +0x9dc load and sound set. race.sh menu car order fixed: 4 Mantis, 6 Borneo, 7 Bronco, 11 Cobra, 12 Thunderhawk (internal car-table names; [verified] by the logged physics against each BuggyConfigs file, and for 0, 11, 12 by the ObjectBin\BuggyN.bin the race loads).
+
+Handling (measured 2026-11-10 for the 1NSANE car ports chat; write-up kept outside the repo in work/handling-for-1nsane.md). Units [verified]: cm, 60 ticks a second, gravity 1.8 cm/tick² = 64.8 m/s². Config parser 0x4c61f0: key table 0x5a20f8 (name, destination, default) into a 0x11c-byte block per car at 0x5cc030; read by 0x492d70 (car) and 0x4a2e40 (wheels). Suspension [verified]: spring object at wheel +0x24c; anchor (+0x40) = model attach point lowered by radius (wheel +0x40c, 37.19) × (ride height + 0.15), and this is full droop. Travel +0xf0 is clamped to −radius..MaxExtension (+0x12c) by 0x4d59a0. Stiffness +0x120 = Front Spring Y × mass (Rear Spring Y is never read there). Gear tables at 0x59bd40, 8 floats per gearbox: reverse, neutral, forward gears. Debug: ORR_CAR_LOG=<frames> logs the first car's position, gear, rpm and four wheel travels, plus each car's spring geometry once; run with tools/dev/race.sh.
+
+## On AntiStatic (moved 2026-11-12)
+The translator and the runtime core now come from AntiStatic, the shared recompilation toolkit, pinned as a
+submodule in third_party/antistatic at v0.2.0 (Ant, 2026-11-12: move every game fully onto it). Deleted:
+tools/recomp.py, codegen.py, discover.py, fpustack.py, pe.py, x86.py, memdiff.py, and runtime/ advapi32, com,
+dinput, dsound, files, fpu, gdi32, kernel32, kernel32x, keys, main, mem, ole32, options, pad, prof, res, sync,
+user32, user32x, win, winmisc, winmm, mss32 (.c) with cpu.h, input.h, options.h, pad.h, runtime.h, sound.h,
+win.h; also x86.c (TD6's CPUID/RDTSC: OffRoad.exe uses neither [verified: no such call in the translation]).
+The port keeps the renderer (ddraw, d3d, vk, vkthread, swrast, shaders) until the toolkit's runtime/d3d7 has
+the water, car lights, scene objects, SSAO, depth-back and the options/widescreen entry points; then it moves too.
+- runtime/port.h describes the game; runtime/port_offroad.c is everything the old copies did for this game, as
+  the toolkit's hooks: ddraw_init in port_graphics_init (after the game's registry defaults, 1024x768x32, and
+  the first-start options.txt template), widescreen/padgame/bink init at the top of game_init
+  (port_game_init_first: the old order), menu_init in port_runtime_ready, vk_stop in port_at_exit, the option
+  fan-out in port_options_changed, light.c's file watch in port_file_hidden (called where CreateFile starts,
+  as before), dplay in port_cocreate, the pad name and frame, mouse mapping, win_key, the Miles engine class
+  (port_miles_class 2) and mix_options as miles_set_class_gain, and the --test mixer clock (the virtual clock
+  at each presented frame, set in game_frame).
+- inifile.c's GetPrivateProfile* replace the core's simpler ones (the core's are weak since v0.2.1).
+- The renderer moved too (2026-11-13, pin v0.2.9): ddraw, d3d, vk, vkthread, swrast, the shaders and their
+  headers are the toolkit's runtime/d3d7; Off-Road's features are turned on in port.h (PORT_D3D7_SCREEN_WORLD,
+  SSAO, BAKED_LIGHT, WATER, SCENE_OBJECTS, DEPTHBACK, STENCIL, AA_MODES, TAA_HP_HISTORY, SMOKE_STEADY,
+  FAST_SCREEN, smoke density 3, 100 units a metre, PORT_DDRAW_8BIT, PORT_WS_BG_DEPTH) with this game's
+  defaults (resolution native, fog off, textures smooth, colour precision high). port_offroad.c gives the
+  spray's alpha gain, the countdown's centring and the terrain A/B check's draw recording as the toolkit's
+  hooks; the mouse mapping is the toolkit's. fsr2.cpp, fsr2_compat.h and dlss.c stay here (the toolkit
+  has only their interfaces). port.h also declares widescreen_allowed (widescreen.c), which the toolkit's
+  widescreen.h doesn't.
+  Checks [verified 2026-11-13]: lockstep IDENTICAL on 3600 frames, fncheck no new FAIL, the race trace
+  identical. Frame dumps against the port's own renderer (each scene repeats exactly run to run): the night
+  race (Everglade 1, car lights, 6 frames) identical; day frames (Campy 2 race, Slaughter 1 through a puddle)
+  have 0 to 15 pixels of about a million one level off (e.g. frame 3600: (1077,188) blue 30 vs 29, (561,232)
+  56 vs 55). Ruled out, each by a run (2026-11-13): FAST_SCREEN (off: the same pixels), the volumetric dust's sort
+  (volumetric_dust=off: the same), the draw shaders' compilation (the old renderer's draw.frag/draw.vert SPIR-V
+  swapped in: frames byte-identical to the new renderer's), ambient occlusion (off: the same). Recorded with the
+  AntiStatic chat as an unexplained one-level difference in 2-15 pixels of day frames: invisible, gameplay identical.
+- Since v0.2.1 (pin v0.2.2, 2026-11-13) the core has what the port first stood in for: win_key, mem_heap_ops,
+  mem_ranges and cpu_dead_stacks (native_land.c's terrain A/B check is whole again), the --test mixer clock at
+  each presented frame (PORT_TEST_SOUND_AT_FRAME, set before timers_run_due as the old main.c did),
+  pad_player_count (padgame.c's pad_is_two_players), and the first-start options.txt from
+  port_option_default/port_option_help. v0.2.2 regenerated: lockstep IDENTICAL 3600 frames, fncheck no new
+  FAIL, the race trace identical to the pre-move build, a real-time run writes the 29-option template.
+- Build: make translates with $(ANTISTATIC)/translator/recomp.py ("AS" would clash with make's assembler
+  variable). A private working repository is the true copy; this public one gets snapshots of it, each with
+  the toolkit pinned at a public release tag.
+Checks [verified 2026-11-12]: lockstep IDENTICAL on all 3600 frames, as before. fncheck 7054 pass (7050 before),
+3 new FAIL, all the toolkit's x87 control word read back with bit 6 set as hardware does (0x7f) where Unicorn
+gives 0x3f: 004bef70, 0053e690, 0056dec4, added to tests/fncheck_baseline.txt. The scripted race (Campy track 2,
+Highrider, throttle then full lock, ORR_CAR_LOG) gives the same car position on all 2257 logged frames as the
+pre-move build; frames 3600-4500 identical; frame 4800 and the sound recording differ, but the pre-move build
+doesn't repeat them either (two runs differ too); sound levels per 5 s match within that run-to-run noise.
+A real-time run at 144 fps through the pause menu's Restart: no crash, the options template written.
+
+Steam Deck benchmark (2026-11-14, Ant via the AntiStatic chat: "performance appears degraded"): ~/DevWork/offroad-bench/bench.sh
+(outside the repo), headless --container on the Deck, real time, off-screen 1280x800, frame_rate 144, vsync off, Everglade 1 day,
+Highrider, full throttle 1800 frames, each build twice alternated. Pre-move b261445 vs AntiStatic v0.2.9: frame 5.60 vs 5.70 ms
+(GPU-bound: GPU 5.13 vs 5.25 ms); game thread CPU 0.99 vs 1.71 ms a frame (vertex processing 0 vs 0.12, draw recording 0.66 vs
+0.85); process CPU 21.8 vs 24.2 s. The toolkit's FAST_SCREEN fills the 128-byte SwVertex where this port's VkVtx copied the game's
+40-byte vertices (the 2026-11-04 CPU round's biggest win): told the AntiStatic chat.
+Then (2026-11-14): AntiStatic v0.2.26 sends FAST_SCREEN draws to the render thread as the game's 40 bytes
+(frames identical to v0.2.9 on every repeatable frame, the race trace identical), and v0.2.28 spins the render
+thread 200 pauses before sleeping instead of 2000 (ORR_RENDER_SPIN=N at run time). ORR_PROFILE on the laptop,
+same race, CPU ms: pre-move 3230, v0.2.26 3857 (render_main's spin 513 of it), v0.2.28 3624 (spin 68, the 40-byte
+expansion 51). Deck (~/DevWork/offroad-bench/bench2.sh, per-thread CPU from /proc): spin 2000 / 200 / 0 all 5.6 ms
+frames (GPU-bound), whole-run CPU 22.9 / 21.3 / 21.5 s (pre-move 21.8). The vk stats line's "game thread CPU" was
+always the render thread's (timed where the frame-end stats run); v0.2.29 labels it so. ORR_CPU_FROM is the game
+thread's: about 2.9-3.0 ms a frame in every build. Installed v0.2.29 2026-11-14 (Ant's yes).
+AntiStatic v0.2.30 (2026-11-14, Ant's AntRecomp report: "program exited with code 38" after a normal quit): a real run
+that the game quits normally exits 0; the log keeps the game's own code (whatever eax held: 13 or 38). Checked with
+ORR_KEYS="100:ESC,300:ESC,500:ESC,700:ESC,1000:ENTER,1300:UP,1500:ENTER" (Exit Game, then Yes: the dialog starts on
+No) off-screen: exit 0, log "code 13". Frames and race trace identical to v0.2.9. Installed.
+
+Black blocks on track walls at night (Ant, 2026-11-18; "you never resolved that"): hard-edged dark polygons on the banks where the
+headlights fall, with Car Light Shadows on [verified: off, they go; Everglade 1 night, frame 3600 of race.sh 0 1 0 0 night with
+night=darkest, draw_distance=extreme, antialiasing=4x]. The headlight rays (draw.frag LIGHT_RAYS, from the lamps to each lit point,
+stopping 15 cm short) hit the banks' own coarse facets: a low lamp lights a wall that folds in and out, and each fold "shadowed" the
+next at 6 % light. A 1.5 m allowance (test only, the toolkit's shader) removed the nearest but left folds further up. Fix in this
+port's data: tools/bake/export.py leaves ground-like scenery (GROUNDLIKE: bank, bnk, cliff, ravine, mound, canyon_N/top/middle,
+canyonslope) out of <slug>.rtg as it leaves out the terrain; the sun bake (.geo) keeps them. 26 .rtg files remade (a third to three
+quarters fewer triangles, Red Rock most) in ~/.local/share/offroad-native/lightmaps and on the Deck (old ones in work/nightbug/
+rtg_backup and the Deck's lightmaps/rtg-before-2026-11-18). After: that frame equals shadows-off; objects still cast (a boulder's
+shadow on Red Rock's road, frame 4400). New players get it from their own bake (bake_all.py remakes a missing .rtg).

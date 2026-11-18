@@ -7,13 +7,17 @@ Game units (x back from glTF's -x, 100 to the metre). What blocks light: the ter
 the scenery, not the water, sky, puddles, racing line, or the rain-only and see-through parts.
 OUT.geo, little endian: 'OGEO', W, H, nmat, ntri (u32); W * H f32 heights; nmat {u32 tw, th; f32 albedo[3]; tw * th u8 alpha};
 ntri {f32 p[9]; f32 uv[6]; u32 mat (bit 31: the terrain)}; u32 nlamp; nlamp {f32 pos[3], dir[3]}."""
-import io, json, os, struct, sys, zlib
+import io, json, os, re, struct, sys, zlib
 import numpy as np
 from PIL import Image
 
 T = os.path.expanduser('~/DevWork/Car Models/Off-Road Redneck Racing/models/tracks')
 S, CELL = 0.01, 512.0
 MASK = 128
+# Scenery that is really ground: banks, cliffs, canyon walls and slopes, ravines, mounds. The headlights' rays leave it out as
+# they leave out the terrain: its coarse facets, lit from a car's low lamps, shadowed each other in hard black blocks on the
+# walls at night (Ant, 2026-11-18). It still blocks the sun in the bake (OUT.geo).
+GROUNDLIKE = re.compile(r'bank|bnk|cliff|ravine|mound|^canyon_(\d|top|middle)|^canyonslope', re.I)
 
 
 def read_glb(path):
@@ -82,6 +86,7 @@ def main(slug, out, rt_out=None):
             return
         if 'mesh' in n:
             is_terrain = name == 'terrain'
+            groundlike = bool(GROUNDLIKE.search(g['meshes'][n['mesh']].get('name', '')))
             for p in g['meshes'][n['mesh']]['primitives']:
                 if 'lamp_onoff' in g['materials'][p.get('material', 0)]['name'] and g['materials'][p.get('material', 0)]['name'].endswith('_add'):
                     pos = acc(p['attributes']['POSITION']).astype(float)
@@ -106,7 +111,7 @@ def main(slug, out, rt_out=None):
                 idx = acc(p['indices']).reshape(-1) if 'indices' in p else np.arange(len(pos))
                 idx = idx.reshape(-1, 3).astype(int)
                 tris.append((w[idx].astype('f4').reshape(-1, 9), uv[idx].astype('f4').reshape(-1, 6),
-                             np.full(len(idx), mid | (0x80000000 if is_terrain else 0), 'u4')))
+                             np.full(len(idx), mid | (0x80000000 if is_terrain else 0), 'u4'), np.full(len(idx), groundlike)))
                 if is_terrain:
                     if height is None: height = {}
                     ij = np.round(w[:, [0, 2]] / CELL).astype(int)
@@ -122,6 +127,7 @@ def main(slug, out, rt_out=None):
     for (a, c), y in height.items():
         hf[c, a] = y
     P = np.concatenate([t[0] for t in tris]); U = np.concatenate([t[1] for t in tris]); M = np.concatenate([t[2] for t in tris])
+    GL = np.concatenate([t[3] for t in tris])
     with open(out, 'wb') as f:
         f.write(b'OGEO' + struct.pack('<4I', W, H, len(mats), len(P)))
         f.write(hf.tobytes())
@@ -145,10 +151,11 @@ def main(slug, out, rt_out=None):
         for c, nr, k in clusters:
             d = nr / (np.linalg.norm(nr) or 1)
             f.write(struct.pack('<6f', *(c / k), *d))
-    # what headlights' rays hit in the game: the solid scenery, without the terrain or see-through cut-outs (trees, fences)
+    # what headlights' rays hit in the game: the solid scenery, without the terrain, the ground-like scenery or see-through
+    # cut-outs (trees, fences)
     if rt_out:
         full = [mt[1] == 0 or sum(c >= 128 for c in mt[4]) >= 0.97 * len(mt[4]) for mt in mats]      # (a cut-out with next to no holes counts)
-        solid = (M >> 31 == 0) & np.array([full[m & 0x7fffffff] for m in M.tolist()])
+        solid = (M >> 31 == 0) & ~GL & np.array([full[m & 0x7fffffff] for m in M.tolist()])
         with open(rt_out, 'wb') as f:
             f.write(b'ORTG' + struct.pack('<I', int(solid.sum())) + zlib.compress(P[solid].tobytes(), 6))
     print(slug, 'lamps', len(clusters), 'cells', W, H, 'tris', len(P), 'terrain', int((M >> 31).sum()), 'height', hf.min(), hf.max())

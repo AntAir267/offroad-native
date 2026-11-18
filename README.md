@@ -39,6 +39,9 @@ You need: gcc, make, cmake (for SDL3), Python 3 with `capstone` (5.x), Vulkan he
 FFmpeg's development libraries (libavformat, libavcodec, libswscale, libswresample, libavutil).
 `glslangValidator` is only needed if you change a shader. Optional: `unicorn` 2.x for the checks below.
 
+0. Clone with the toolkit: `git clone --recursive`, or `git submodule update --init` in a clone you
+   already have. The translator and the Windows stand-in come from
+   [AntiStatic](https://github.com/AntAir267/AntiStatic-Recomp-Toolkit), pinned in `third_party/antistatic`.
 1. Install Off-Road: Redneck Racing. The build is made for the ZOOM Platform release (`OffRoad.exe`, 1,798,144 bytes,
    sha256 `15545ebd43a9b1cad09a7047a52c66005f4b5a52f7d8cdf3c2ce5166dc510a64`). Other releases may need changes in
    `builds/`.

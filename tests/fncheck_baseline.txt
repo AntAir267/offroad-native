@@ -8,3 +8,7 @@ FAIL 00574b16: seed 1: st phys4 -nan vs nan; mem 025ef7da ff vs 00; mem 025ef7db
 FAIL 00574d1c: seed 1: st phys6 387.782 vs 387.78199999999998226; 
 runs: 7050 pass, 15202 skipped (import 3814, fault 11282, long 106), 20 FAIL
 done
+# AntiStatic v0.2.0: fnstcw reads the x87 control word back as hardware keeps it (bit 6 set), which Unicorn doesn't (0x7f vs 0x3f)
+FAIL 004bef70: seed 2: mem 025ef76c 7f vs 3f; mem 025ef76c 7f vs 3f; mem 025ef76c 7f vs 3f; mem 025ef76c 7f vs 3f; mem 0
+FAIL 0053e690: seed 1: mem 025ef784 7f vs 3f; mem 025ef784 7f vs 3f; mem 025ef784 7f vs 3f; mem 025ef784 7f vs 3f; mem 0
+FAIL 0056dec4: seed 1: eax 00001f7f vs 00001f3f; mem 025ef7d4 7f vs 3f; mem 025ef7d4 7f vs 3f; mem 025ef7d4 7f vs 3f; me

@@ -14,6 +14,7 @@
     "Steam Deck"
   ],
   "approach": "Static x86 recompilation to C on the player's machine; DirectX 7 on Vulkan; lockstep-checked against the original code",
+  "toolchain": "AntiStatic",
   "started": "2026-10-30",
   "help": [
     "Play-testing every track to the end",

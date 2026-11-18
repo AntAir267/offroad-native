@@ -2,8 +2,8 @@
 # Launch straight into a race, scripted through the Time Trial menus (development; run from the repository root):
 #   race.sh OUTDIR LOCATION TRACK CAR PAINT LOOK FRAMES [EVERY] [extra arguments, e.g. --option draw_distance=extreme]
 # LOCATION 0 Everglade, 1 Backwater, 2 Slaughter Yard, 3 Red Rock, 4 Campy, 5 Dead Man's Drop; TRACK 1-4;
-# CAR 0 Highrider, 1 Blackfoot, 2 Marauder, 3 Polecat, 4 Mudcat, 5 Zambezi, 6 Bronco, 7 Rodeo, 8 Quasar, 9 Hornet, 10 Comanche,
-# 11-12 ?, 13 Hurricane, 14 Firesole, 15 Mojo (all unlocked here); PAINT steps right from the first; LOOK day, sunset, night, day_rain, night_snow...; FRAMES counted from the race's first frame.
+# CAR 0 Highrider, 1 Blackfoot, 2 Marauder, 3 Polecat, 4 Mantis, 5 Zambezi, 6 Borneo, 7 Bronco, 8 Quasar, 9 Hornet, 10 Comanche,
+# 11 Cobra, 12 Thunderhawk, 13 Hurricane, 14 Firesole, 15 Mojo (all unlocked here); PAINT steps right from the first; LOOK day, sunset, night, day_rain, night_snow...; FRAMES counted from the race's first frame.
 # Environment passes through: REAL=1 a real-time run (no --test), HOLD=<frames> of throttle (default all), BIN=<program> (default
 # build/offroad: e.g. the installed one, to compare), any ORR_*.
 out=$1; loc=$2; tr=$3; car=$4; pa=$5; look=$6; n=$7; ev=${8:-60}; shift 8 2>/dev/null || shift $#

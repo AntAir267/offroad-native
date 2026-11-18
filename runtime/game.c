@@ -377,6 +377,66 @@ static int race_update_hook(CPU *c)
         extern void water_tick(void);
         water_tick();
     }
+    static int rpm_every = -1;
+    if (rpm_every < 0) {
+        const char *e = getenv("ORR_RPM_LOG");
+        rpm_every = e ? atoi(e) : 0;
+    }
+    if (rpm_every > 0 && frame_count % (unsigned long)rpm_every == 0) {
+        /* development: each drawn car's engine rpm (drivetrain +0x28), gear (+0x44), load (car +0x9dc, what
+           the engine sound gets / 3) and its sound set (sound object +0xb0 start effect, first sample id) */
+        extern const uint32_t *light_cars(int *n);
+        int n;
+        const uint32_t *cars = light_cars(&n);
+        for (int i = 0; i < n && i < 4; i++) {
+            uint32_t drv = R32(cars[i] + 0x5a0), snd = R32(cars[i] + 0x9a8);
+            uint32_t rec = snd ? R32(snd + 0x14) : 0;
+            if (drv)
+                LOG(LOG_ALWAYS, "rpm: frame %lu car %d %x rpm %.0f gear %d load %.3f start-fx %d sample %d",
+                    frame_count, i, cars[i], RF32(drv + 0x28), (int)R32(drv + 0x44), RF32(cars[i] + 0x9dc),
+                    snd ? (int)R32(snd + 0xb0) : -1, rec ? (int)(int16_t)R16(rec) : -1);
+        }
+    }
+    static int car_every = -1;
+    if (car_every < 0) {
+        const char *e = getenv("ORR_CAR_LOG");
+        car_every = e ? atoi(e) : 0;
+    }
+    if (car_every > 0 && frame_count % (unsigned long)car_every == 0) {
+        /* development: the first drawn car's position (cm), gear, rpm and suspension (handling measurements) */
+        extern const uint32_t *light_cars(int *n);
+        int n;
+        const uint32_t *cars = light_cars(&n);
+        if (n > 0) {
+            uint32_t car = cars[0], mo = car + 0x24, nw = R32(car + 0x500), wl = R32(car + 0x508);
+            LOG(LOG_ALWAYS, "car: frame %lu pos %.1f %.1f %.1f wheels %u", frame_count, RF32(mo + 48), RF32(mo + 52),
+                RF32(mo + 56), nw);
+            /* per wheel: the wheel centre's height above its spring anchor along the spring axis (spring +0xf0, cm;
+               clamped to -radius..MaxExtension by 0x4d59a0) */
+            static uint32_t geo_car;
+            for (uint32_t w = 0; car != geo_car && wl && w < nw && w < 4; w++) {
+                /* once per car: radius (wheel +0x40c), ride height + 0.15 (+0x574), the spring's anchor (+0x40) and
+                   the model's attach point (+0x80 y, -(+0x84) x, -(+0x8c) z), MaxExtension (+0x12c), stiffness (+0x120,
+                   Spring Y x mass), Shock Strength (+0x138), Shock Damping (+0x13c) */
+                uint32_t wh = R32(wl + 4 * w), sp = wh ? R32(wh + 0x24c) : 0;
+                if (sp)
+                    LOG(LOG_ALWAYS, "cargeo: w %u radius %.2f rh %.3f anchor %.2f %.2f %.2f attach_y %.2f max %.1f k %.3f strength %.3f damping %.3f mass %.2f",
+                        w, RF32(wh + 0x40c), RF32(wh + 0x574), RF32(sp + 0x40), RF32(sp + 0x44), RF32(sp + 0x48),
+                        RF32(sp + 0x80), RF32(sp + 0x12c), RF32(sp + 0x120), RF32(sp + 0x138), RF32(sp + 0x13c),
+                        RF32(car + 0x4d4));
+            }
+            geo_car = car;
+            char buf[256];
+            int k = 0;
+            for (uint32_t w = 0; wl && w < nw && w < 4; w++) {
+                uint32_t wh = R32(wl + 4 * w), sp = wh ? R32(wh + 0x24c) : 0;
+                k += snprintf(buf + k, sizeof buf - k, " %.1f", sp ? RF32(sp + 0xf0) : 0.0f);
+            }
+            uint32_t drv = R32(car + 0x5a0);
+            LOG(LOG_ALWAYS, "carw: frame %lu gear %d rpm %.0f travel%s", frame_count, drv ? (int)R32(drv + 0x44) : -1,
+                drv ? RF32(drv + 0x28) : 0.0f, buf);
+        }
+    }
     if (int_on && !deterministic_run() && (int)R32(0x5d1528 + 0x30) > 0) {
         tick_t = RF32(0x5d1528 + 0x2c);
         int_snapshot();
@@ -808,6 +868,8 @@ static int fog_hook(CPU *c) { native_fog_call(c); return 1; }
 
 void game_init(void)
 {
+    extern void port_game_init_first(void);
+    port_game_init_first();
     if (!widescreen_allowed())
         return;
     native_land_init();

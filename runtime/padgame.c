@@ -43,6 +43,10 @@
 #define PAD_DEVICE "Controller (XBOX 360 For Windows)"
 #define DEVICE_SIZE (100 + 4 + 200)
 
+/* a two-player race (split screen) is on: game.c and taa.c leave their in-between frames and
+   camera stick out of it */
+int pad_is_two_players(void) { return pad_player_count() > 1; }
+
 const char *padgame_device_name(const char *name) { (void)name; return PAD_DEVICE; }
 int ifc_rumble_wanted(void) { return 1; }
 

@@ -11,13 +11,22 @@ CC = gcc
 SDL3 ?= third_party/sdl3
 FFMPEG_CFLAGS := $(shell pkg-config --cflags libavformat libavcodec libswscale libswresample libavutil 2>/dev/null)
 FFMPEG_LIBS := $(shell pkg-config --libs libavformat libavcodec libswscale libswresample libavutil 2>/dev/null)
-CFLAGS_COMMON = -std=gnu11 -g -fno-strict-aliasing -frounding-math -fno-omit-frame-pointer -Iruntime -Igen -I$(SDL3)/include
+# AntiStatic, the shared recompilation toolkit (third_party/antistatic, pinned at a release tag):
+# its translator, its runtime core (win32, cpu) and its Miles stand-in. runtime/ holds what is this
+# game's: port.h, the renderer, menus, effects and the game's hooks.
+ANTISTATIC ?= third_party/antistatic
+AS_RT = $(ANTISTATIC)/runtime
+CFLAGS_COMMON = -std=gnu11 -g -fno-strict-aliasing -frounding-math -fno-omit-frame-pointer -Iruntime -I$(AS_RT)/win32 -I$(AS_RT)/d3d7 -I$(AS_RT)/cpu -Igen -I$(SDL3)/include
 CFLAGS_GEN = $(CFLAGS_COMMON) -O3 -fno-semantic-interposition -w -DCPU_FAST_MEM
 CFLAGS_RT = $(CFLAGS_COMMON) -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation $(FFMPEG_CFLAGS)
 LDFLAGS = -rdynamic $(SDL3)/lib/libSDL3.a $(FFMPEG_LIBS) -pthread -lm -ldl -lz -lvulkan
 
 RT_SRC = $(wildcard runtime/*.c)
 RT_OBJ = $(patsubst runtime/%.c,build/obj/rt_%.o,$(RT_SRC))
+AS_SRC = $(wildcard $(AS_RT)/win32/*.c) $(wildcard $(AS_RT)/d3d7/*.c) $(AS_RT)/cpu/fpu.c $(AS_RT)/music/mss32.c
+AS_OBJ = $(patsubst %.c,build/obj/as_%.o,$(notdir $(AS_SRC)))
+AS_H = $(wildcard $(AS_RT)/win32/*.h $(AS_RT)/cpu/*.h $(AS_RT)/d3d7/*.h)
+vpath %.c $(AS_RT)/win32 $(AS_RT)/d3d7 $(AS_RT)/cpu $(AS_RT)/music
 # The code files recomp.py wrote, listed in gen/files.mk once it has run (a fresh tree has none
 # yet: make writes the list after translating, then reads it again).
 -include gen/files.mk
@@ -26,33 +35,22 @@ GEN_OBJ = $(patsubst gen/%.c,build/obj/gen_%.o,$(GEN_SRC))
 
 all: build/offroad
 
-gen/funcs.h: $(filter-out tools/profile.py tools/fsr2_shaders.py,$(wildcard tools/*.py)) $(BUILD_CFG)
-	$(PY) tools/recomp.py $(GAME)/OffRoad.exe $(BUILD_CFG) gen
+gen/funcs.h: $(wildcard $(ANTISTATIC)/translator/*.py) $(BUILD_CFG)
+	$(PY) $(ANTISTATIC)/translator/recomp.py $(GAME)/OffRoad.exe $(BUILD_CFG) gen
 gen/table.c gen/stubs.c: gen/funcs.h ;
 gen/files.mk: gen/funcs.h
 	@echo 'GEN_CODE = $(sort $(wildcard gen/code_*.c))' > $@
 
-build/obj/gen_%.o: gen/%.c gen/funcs.h runtime/cpu.h | build/obj
+build/obj/gen_%.o: gen/%.c gen/funcs.h $(AS_RT)/cpu/cpu.h | build/obj
 	$(CC) $(CFLAGS_GEN) -c $< -o $@
 
-build/obj/rt_%.o: runtime/%.c runtime/*.h gen/funcs.h | build/obj
+build/obj/rt_%.o: runtime/%.c runtime/*.h $(AS_H) gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -c $< -o $@
 
-# Shaders: SPIR-V headers are generated with glslang and kept in the repository, so building
-# needs glslang only after a shader changed.
-SHADERS = $(wildcard runtime/shaders/*.vert runtime/shaders/*.frag)
-SPV_H = $(addsuffix .spv.h,$(SHADERS))
-GLSLANG ?= glslangValidator
-ifneq ($(shell command -v $(GLSLANG) 2>/dev/null),)
-runtime/shaders/%.spv.h: runtime/shaders/%
-	$(GLSLANG) --target-env vulkan1.3 --vn spv_$(subst .,_,$(notdir $<)) -o $@ $<
-endif
-# draw.frag with rays for the car lights' shadows, on the devices that have them
-runtime/shaders/draw.frag.rays.spv.h: runtime/shaders/draw.frag
-	$(GLSLANG) -DLIGHT_RAYS --target-env vulkan1.3 --vn spv_draw_frag_rays -S frag -o $@ $<
-SPV_H += runtime/shaders/draw.frag.rays.spv.h
-build/obj/rt_vk.o: $(SPV_H)
-shaders: $(SPV_H)
+build/obj/as_%.o: %.c runtime/port.h $(AS_H) gen/funcs.h | build/obj
+	$(CC) $(CFLAGS_RT) -c $< -o $@
+
+# Shaders: the toolkit's runtime/d3d7/shaders, their SPIR-V headers kept in its repository
 
 # FSR 2 (third_party/FidelityFX-FSR2, fetched locally, MIT licence; vk.c's temporal anti-aliasing):
 # its API and Vulkan backend (C++, as AMD ships them, with runtime/fsr2_compat.h for Linux), its
@@ -63,7 +61,7 @@ FSR2 ?= third_party/FidelityFX-FSR2/src/ffx-fsr2-api
 ifneq ($(wildcard $(FSR2)/ffx_fsr2.h),)
 FSR2_PERM = build/fsr2/ffx_fsr2_accumulate_pass_permutations.h
 FSR2_OBJ = build/obj/fsr2_api.o build/obj/fsr2_assert.o build/obj/fsr2_vk.o build/obj/fsr2_shaders_vk.o build/obj/rt_fsr2.o
-CXXFLAGS_FSR2 = -std=c++17 -O2 -g -DFFX_GCC -include runtime/fsr2_compat.h -I$(FSR2) -Ibuild/fsr2 -Iruntime -w
+CXXFLAGS_FSR2 = -std=c++17 -O2 -g -DFFX_GCC -include runtime/fsr2_compat.h -I$(FSR2) -Ibuild/fsr2 -Iruntime -I$(AS_RT)/d3d7 -w
 CFLAGS_RT += -DHAVE_FSR2
 LDFLAGS += -lstdc++
 EXTRA_OBJ += $(FSR2_OBJ)
@@ -78,7 +76,7 @@ build/obj/fsr2_vk.o: $(FSR2)/vk/ffx_fsr2_vk.cpp runtime/fsr2_compat.h | build/ob
 	$(CXX) $(CXXFLAGS_FSR2) -DvkGetPhysicalDeviceMemoryProperties=fsr2_memory_properties -c $< -o $@
 build/obj/fsr2_shaders_vk.o: $(FSR2)/vk/shaders/ffx_fsr2_shaders_vk.cpp $(FSR2_PERM) runtime/fsr2_compat.h | build/obj
 	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
-build/obj/rt_fsr2.o: runtime/fsr2.cpp runtime/fsr2.h runtime/fsr2_compat.h | build/obj
+build/obj/rt_fsr2.o: runtime/fsr2.cpp $(AS_RT)/d3d7/fsr2.h runtime/fsr2_compat.h | build/obj
 	$(CXX) $(CXXFLAGS_FSR2) -c $< -o $@
 endif
 
@@ -98,7 +96,7 @@ build/$(notdir $(DLSS_SO)): $(DLSS_SO) | build/obj
 endif
 endif
 
-build/offroad: $(GEN_OBJ) $(RT_OBJ) $(EXTRA_OBJ)
+build/offroad: $(GEN_OBJ) $(RT_OBJ) $(AS_OBJ) $(EXTRA_OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 build/obj:
@@ -120,17 +118,17 @@ install: all
 
 # Function-level check against the original code in Unicorn (tests/fncheck.c)
 UNICORN ?= $(firstword $(wildcard .venv/lib/python3*/site-packages/unicorn))
-build/obj/rt_main_nomain.o: runtime/main.c runtime/*.h gen/funcs.h | build/obj
+build/obj/as_main_nomain.o: $(AS_RT)/win32/main.c runtime/port.h $(AS_H) gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -DRUNTIME_NO_MAIN -c $< -o $@
 
-build/fncheck: tests/fncheck.c $(filter-out build/obj/rt_main.o,$(RT_OBJ)) build/obj/rt_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o $(EXTRA_OBJ)
+build/fncheck: tests/fncheck.c $(RT_OBJ) $(filter-out build/obj/as_main.o,$(AS_OBJ)) build/obj/as_main_nomain.o $(GEN_OBJ) build/obj/gen_x87_special.o $(EXTRA_OBJ)
 	$(CC) $(CFLAGS_RT) -I$(UNICORN)/include -o $@ $^ $(UNICORN)/lib/libunicorn.a $(LDFLAGS) -lrt
 
 # Reference build: the original code in Unicorn on the same runtime (ref/ref_cpu.c)
-build/obj/ref_cpu.o: ref/ref_cpu.c runtime/*.h gen/funcs.h | build/obj
+build/obj/ref_cpu.o: ref/ref_cpu.c runtime/*.h $(AS_H) gen/funcs.h | build/obj
 	$(CC) $(CFLAGS_RT) -I$(UNICORN)/include -c $< -o $@
 
-build/offroad_ref: $(RT_OBJ) $(GEN_OBJ) build/obj/gen_x87_special.o build/obj/ref_cpu.o $(EXTRA_OBJ)
+build/offroad_ref: $(RT_OBJ) $(AS_OBJ) $(GEN_OBJ) build/obj/gen_x87_special.o build/obj/ref_cpu.o $(EXTRA_OBJ)
 	$(CC) -o $@ $^ $(UNICORN)/lib/libunicorn.a $(LDFLAGS) -lrt
 
 check: build/fncheck
@@ -139,4 +137,4 @@ check: build/fncheck
 clean:
 	rm -rf build gen
 
-.PHONY: all clean shaders check install
+.PHONY: all clean check install
